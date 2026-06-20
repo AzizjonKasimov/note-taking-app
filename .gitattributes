@@ -1,0 +1,18 @@
+# Normalize all text files to LF in the repo by default.
+* text=auto eol=lf
+
+# Windows batch scripts must stay CRLF.
+*.bat text eol=crlf
+
+# The Gradle wrapper shell script is run under WSL/Linux too — keep it LF.
+gradlew text eol=lf
+
+# Treat these as binary (never normalize).
+*.jar binary
+*.apk binary
+*.aab binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.keystore binary
+*.jks binary

@@ -1,0 +1,4 @@
+<resources>
+    <!-- Base window theme. Actual app colors are provided by the Compose Material 3 theme. -->
+    <style name="Theme.Notes" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
