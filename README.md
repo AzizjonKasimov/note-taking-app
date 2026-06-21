@@ -8,7 +8,8 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 - Search across titles and content
 - Swipe a note to delete
 - Light / dark theme with Android 12+ dynamic color
-- 100% local — no account, no network
+- Local storage (Room) + one-tap backup/restore to a file in your Google Drive — no account or setup
+- In-app auto-update from GitHub Releases
 
 ## Tech stack
 
@@ -49,7 +50,34 @@ To put it on your phone: enable **Developer options → USB debugging**, connect
 then `installDebug` — or copy `app-debug.apk` to the phone and open it (allow installs
 from this source).
 
+## Releasing a new version
+
+Updates reach the phone through the in-app updater, which reads `version.json` from the
+public [releases repo](https://github.com/AzizjonKasimov/note-taking-app-releases). To cut
+a release:
+
+```powershell
+.\release.ps1 -VersionName 1.2 -VersionCode 3 -Notes "What changed"
+```
+
+This bumps the version, builds a signed APK, publishes a GitHub release, and updates
+`version.json`. The app offers the update on next launch.
+
+## Signing
+
+Release builds are signed with `release.keystore` using credentials in `keystore.properties`
+(both gitignored). **Back these up** — the same key must sign every update, or installs fail
+with a signature mismatch.
+
+## Backup & restore
+
+Backup uses Android's Storage Access Framework — **no Google account, API keys, or
+permissions**. In the app's **gear** screen, *Set up Drive backup* lets you pick a file in
+your Google Drive once; the app then writes your notes there automatically a few seconds
+after each change (`backup/BackupManager.kt`). *Restore* reads them back — handy on a new
+phone. Notes are merged by id, newest-wins.
+
 ## Status
 
-MVP. See the project context in `my_agent_configs` for the backlog (markdown, tags,
-reminders, share/export, optional sync).
+- Working: notes CRUD, search, swipe-delete, themes, in-app auto-update, Google Drive backup/restore
+- Backlog: markdown, tags/folders, pin, reminders, share/export

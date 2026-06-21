@@ -7,10 +7,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.azizjon.notes.update.UpdatePrompt
 
 object Routes {
     const val LIST = "list"
     const val EDIT = "edit"
+    const val BACKUP = "backup"
     const val ARG_ID = "noteId"
     fun edit(id: Long) = "$EDIT/$id"
 }
@@ -27,6 +29,7 @@ fun NotesApp() {
                 viewModel = viewModel,
                 onAddNote = { navController.navigate(Routes.edit(0)) },
                 onOpenNote = { id -> navController.navigate(Routes.edit(id)) },
+                onOpenBackup = { navController.navigate(Routes.BACKUP) },
             )
         }
         composable(
@@ -40,5 +43,14 @@ fun NotesApp() {
                 onDone = { navController.popBackStack() },
             )
         }
+        composable(Routes.BACKUP) {
+            BackupScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+            )
+        }
     }
+
+    // Checks for a newer release on launch and offers a one-tap in-app update.
+    UpdatePrompt()
 }

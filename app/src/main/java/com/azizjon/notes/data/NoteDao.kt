@@ -22,8 +22,14 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE id = :id")
     suspend fun getById(id: Long): Note?
 
+    @Query("SELECT * FROM notes ORDER BY updatedAt DESC")
+    suspend fun getAll(): List<Note>
+
     @Upsert
     suspend fun upsert(note: Note): Long
+
+    @Upsert
+    suspend fun upsertAll(notes: List<Note>)
 
     @Delete
     suspend fun delete(note: Note)

@@ -17,4 +17,16 @@ class NotesRepository(private val dao: NoteDao) {
     suspend fun delete(note: Note) = dao.delete(note)
 
     suspend fun deleteById(id: Long) = dao.deleteById(id)
+
+    suspend fun allNotes(): List<Note> = dao.getAll()
+
+    /** Merges imported notes by id, keeping whichever copy is newer (last-write-wins). */
+    suspend fun importNotes(incoming: List<Note>) {
+        val existing = dao.getAll().associateBy { it.id }
+        val toWrite = incoming.filter { note ->
+            val local = existing[note.id]
+            local == null || note.updatedAt > local.updatedAt
+        }
+        if (toWrite.isNotEmpty()) dao.upsertAll(toWrite)
+    }
 }
