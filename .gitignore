@@ -19,3 +19,6 @@ keystore.properties
 # Generated APKs/AABs
 *.apk
 *.aab
+
+# Local agent pointer file (kept local, not published)
+/CLAUDE.md
