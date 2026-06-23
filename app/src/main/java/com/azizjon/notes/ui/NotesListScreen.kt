@@ -238,7 +238,7 @@ private fun NoteRow(
                 if (note.content.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = note.content,
+                        text = contentPreview(note.content),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
@@ -283,3 +283,12 @@ private fun transparentFieldColors() = TextFieldDefaults.colors(
 
 private fun formatTimestamp(epochMillis: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(epochMillis))
+
+private val MD_LINK = Regex("""\[([^\]]*)]\([^)]*\)""")
+private val MD_LINE_PREFIX = Regex("""(?m)^\s{0,3}(#{1,6}\s+|>\s+|[-*+]\s+|\d+\.\s+)""")
+private val MD_EMPHASIS = Regex("""[*_`~]""")
+
+/** Best-effort strip of markdown syntax so the 2-line list preview reads as plain text. */
+private fun contentPreview(md: String): String =
+    MD_EMPHASIS.replace(MD_LINE_PREFIX.replace(MD_LINK.replace(md) { it.groupValues[1] }, ""), "")
+        .trim()
