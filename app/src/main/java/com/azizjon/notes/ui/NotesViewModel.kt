@@ -8,8 +8,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.azizjon.notes.NotesApplication
+import com.azizjon.notes.backup.BackupData
 import com.azizjon.notes.backup.BackupManager
 import com.azizjon.notes.data.Note
+import com.azizjon.notes.data.Notebook
 import com.azizjon.notes.data.NotesRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -38,10 +41,22 @@ class NotesViewModel(
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
+    /** Currently selected notebook; null means the "All notes" view. */
+    private val _selectedNotebookId = MutableStateFlow<Long?>(null)
+    val selectedNotebookId: StateFlow<Long?> = _selectedNotebookId.asStateFlow()
+
+    val notebooks: StateFlow<List<Notebook>> =
+        repository.notebooks()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val notebookCounts: StateFlow<Map<Long, Int>> =
+        repository.notebookCounts()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val notes: StateFlow<List<Note>> =
-        _query
-            .flatMapLatest { repository.notes(it) }
+        combine(_selectedNotebookId, _query) { id, q -> id to q }
+            .flatMapLatest { (id, q) -> repository.notes(id, q) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _backupState = MutableStateFlow(
@@ -55,10 +70,14 @@ class NotesViewModel(
         _query.value = value
     }
 
+    fun selectNotebook(id: Long?) {
+        _selectedNotebookId.value = id
+    }
+
     suspend fun load(id: Long): Note? = repository.getById(id)
 
-    /** Persists a note. [id] <= 0 creates a new note; otherwise updates the existing one. */
-    fun save(id: Long, title: String, content: String) {
+    /** Persists a note into [notebookId]. [id] <= 0 creates a new note; otherwise updates it. */
+    fun save(id: Long, title: String, content: String, notebookId: Long) {
         viewModelScope.launch {
             val base = if (id > 0) repository.getById(id) ?: Note() else Note()
             repository.save(
@@ -66,6 +85,7 @@ class NotesViewModel(
                     id = if (id > 0) id else 0,
                     title = title.trim(),
                     content = content,
+                    notebookId = notebookId,
                 ),
             )
             scheduleAutoBackup()
@@ -86,6 +106,33 @@ class NotesViewModel(
         }
     }
 
+    // ---- Notebooks ----
+
+    fun createNotebook(name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            repository.createNotebook(name)
+            scheduleAutoBackup()
+        }
+    }
+
+    fun renameNotebook(id: Long, name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            repository.renameNotebook(id, name)
+            scheduleAutoBackup()
+        }
+    }
+
+    fun deleteNotebook(id: Long) {
+        viewModelScope.launch {
+            repository.deleteNotebook(id)
+            // Fall back to "All notes" if the deleted notebook was the active view.
+            if (_selectedNotebookId.value == id) _selectedNotebookId.value = null
+            scheduleAutoBackup()
+        }
+    }
+
     // ---- Backup / restore ----
 
     /** Called after the user picks a Drive file location: persists access and backs up now. */
@@ -98,7 +145,7 @@ class NotesViewModel(
     fun backupNow() {
         viewModelScope.launch {
             _backupState.update { it.copy(inProgress = true, message = null) }
-            val ok = backup.backup(repository.allNotes())
+            val ok = backup.backup(snapshot())
             _backupState.update {
                 it.copy(
                     inProgress = false,
@@ -115,11 +162,11 @@ class NotesViewModel(
         viewModelScope.launch {
             _backupState.update { it.copy(inProgress = true, message = null) }
             val restored = backup.restore()
-            if (restored != null) repository.importNotes(restored)
+            if (restored != null) repository.importBackup(restored.notebooks, restored.notes)
             _backupState.update {
                 it.copy(
                     inProgress = false,
-                    message = if (restored != null) "Restored ${restored.size} notes" else "Restore failed",
+                    message = if (restored != null) "Restored ${restored.notes.size} notes" else "Restore failed",
                 )
             }
         }
@@ -131,14 +178,14 @@ class NotesViewModel(
             _backupState.update { it.copy(inProgress = true, message = null) }
             val restored = backup.readFrom(uri)
             if (restored != null) {
-                repository.importNotes(restored)
+                repository.importBackup(restored.notebooks, restored.notes)
                 backup.saveTarget(uri)
             }
             refreshBackupState()
             _backupState.update {
                 it.copy(
                     inProgress = false,
-                    message = if (restored != null) "Restored ${restored.size} notes" else "Restore failed",
+                    message = if (restored != null) "Restored ${restored.notes.size} notes" else "Restore failed",
                 )
             }
         }
@@ -148,13 +195,16 @@ class NotesViewModel(
         _backupState.update { it.copy(message = null) }
     }
 
+    private suspend fun snapshot(): BackupData =
+        BackupData(notebooks = repository.allNotebooks(), notes = repository.allNotes())
+
     /** Debounced: backs up a few seconds after the last change, if a target is configured. */
     private fun scheduleAutoBackup() {
         if (!backup.isConfigured) return
         autoBackupJob?.cancel()
         autoBackupJob = viewModelScope.launch {
             delay(3_000)
-            backup.backup(repository.allNotes())
+            backup.backup(snapshot())
             refreshBackupState()
         }
     }

@@ -8,7 +8,7 @@ import com.azizjon.notes.data.NotesRepository
 /** Owns the single database/repository/backup instances for the process (simple manual DI). */
 class NotesApplication : Application() {
     val repository: NotesRepository by lazy {
-        NotesRepository(NotesDatabase.get(this).noteDao())
+        NotesRepository(NotesDatabase.get(this))
     }
     val backupManager: BackupManager by lazy { BackupManager(this) }
 }

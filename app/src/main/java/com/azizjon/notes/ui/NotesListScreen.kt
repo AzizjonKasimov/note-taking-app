@@ -15,14 +15,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
@@ -31,10 +34,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -46,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.azizjon.notes.data.Note
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
@@ -59,60 +65,95 @@ fun NotesListScreen(
 ) {
     val notes by viewModel.notes.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
+    val notebooks by viewModel.notebooks.collectAsStateWithLifecycle()
+    val counts by viewModel.notebookCounts.collectAsStateWithLifecycle()
+    val selectedNotebookId by viewModel.selectedNotebookId.collectAsStateWithLifecycle()
     var searching by rememberSaveable { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            if (searching) {
-                SearchField(
-                    query = query,
-                    onQueryChange = viewModel::onQueryChange,
-                    onClose = {
-                        searching = false
-                        viewModel.onQueryChange("")
-                    },
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    // Top-bar title reflects the active notebook, or "All notes" for the unfiltered view.
+    val title = selectedNotebookId
+        ?.let { id -> notebooks.firstOrNull { it.id == id }?.name?.ifBlank { "Untitled" } }
+        ?: "All notes"
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = !searching,
+        drawerContent = {
+            NotebookDrawerSheet(
+                notebooks = notebooks,
+                counts = counts,
+                selectedNotebookId = selectedNotebookId,
+                onSelect = { id ->
+                    viewModel.selectNotebook(id)
+                    scope.launch { drawerState.close() }
+                },
+                onCreate = viewModel::createNotebook,
+                onRename = viewModel::renameNotebook,
+                onDelete = viewModel::deleteNotebook,
+            )
+        },
+    ) {
+        Scaffold(
+            topBar = {
+                if (searching) {
+                    SearchField(
+                        query = query,
+                        onQueryChange = viewModel::onQueryChange,
+                        onClose = {
+                            searching = false
+                            viewModel.onQueryChange("")
+                        },
+                    )
+                } else {
+                    TopAppBar(
+                        title = { Text(title) },
+                        navigationIcon = {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(Icons.Filled.Menu, contentDescription = "Notebooks")
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { searching = true }) {
+                                Icon(Icons.Filled.Search, contentDescription = "Search")
+                            }
+                            IconButton(onClick = onOpenBackup) {
+                                Icon(Icons.Filled.Settings, contentDescription = "Backup & restore")
+                            }
+                        },
+                    )
+                }
+            },
+            floatingActionButton = {
+                FloatingActionButton(onClick = onAddNote) {
+                    Icon(Icons.Filled.Add, contentDescription = "New note")
+                }
+            },
+        ) { padding ->
+            if (notes.isEmpty()) {
+                EmptyState(
+                    searching = query.isNotBlank(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
                 )
             } else {
-                TopAppBar(
-                    title = { Text("Notes") },
-                    actions = {
-                        IconButton(onClick = { searching = true }) {
-                            Icon(Icons.Filled.Search, contentDescription = "Search")
-                        }
-                        IconButton(onClick = onOpenBackup) {
-                            Icon(Icons.Filled.Settings, contentDescription = "Backup & restore")
-                        }
-                    },
-                )
-            }
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = onAddNote) {
-                Icon(Icons.Filled.Add, contentDescription = "New note")
-            }
-        },
-    ) { padding ->
-        if (notes.isEmpty()) {
-            EmptyState(
-                searching = query.isNotBlank(),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(notes, key = { it.id }) { note ->
-                    NoteRow(
-                        note = note,
-                        onClick = { onOpenNote(note.id) },
-                        onDelete = { viewModel.delete(note) },
-                    )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(notes, key = { it.id }) { note ->
+                        NoteRow(
+                            note = note,
+                            onClick = { onOpenNote(note.id) },
+                            onDelete = { viewModel.delete(note) },
+                        )
+                    }
                 }
             }
         }
