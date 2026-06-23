@@ -69,6 +69,9 @@ fun NoteEditScreen(
         richTextState.config.linkTextDecoration = TextDecoration.Underline
     }
 
+    // Typing "1. " / "- " / "* " at a line start auto-starts a list (Docs/Notion-style).
+    MarkdownShortcuts(richTextState)
+
     // Load the existing note once; a brand new note inherits the notebook currently in view.
     LaunchedEffect(noteId) {
         if (noteId > 0) {

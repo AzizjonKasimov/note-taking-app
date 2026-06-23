@@ -1,17 +1,17 @@
 [versions]
-agp = "8.7.3"
-kotlin = "2.0.21"
-ksp = "2.0.21-1.0.28"
+agp = "8.13.2"
+kotlin = "2.3.21"
+ksp = "2.3.9"
 coreKtx = "1.13.1"
-lifecycle = "2.8.7"
-activityCompose = "1.9.3"
-composeBom = "2024.09.03"
+lifecycle = "2.10.0"
+activityCompose = "1.13.0"
+composeBom = "2026.06.00"
 navigationCompose = "2.8.4"
-room = "2.6.1"
+room = "2.8.4"
 junit = "4.13.2"
 androidxTestExtJunit = "1.2.1"
 androidxTestRunner = "1.6.2"
-richeditorCompose = "1.0.0-rc10"
+richeditorCompose = "1.0.0-rc14"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
