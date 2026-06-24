@@ -27,8 +27,8 @@ android {
         applicationId = "com.azizjon.notes"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.5"
+        versionCode = 7
+        versionName = "1.6"
         vectorDrawables { useSupportLibrary = true }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -74,6 +74,24 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
+val copyDebugApkToRoot by tasks.registering {
+    dependsOn("packageDebug")
+    val debugApk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")
+    val rootApk = rootProject.layout.projectDirectory.file("Notes-debug.apk")
+    inputs.file(debugApk)
+    outputs.file(rootApk)
+
+    doLast {
+        debugApk.get().asFile.copyTo(rootApk.asFile, overwrite = true)
+    }
+}
+
+afterEvaluate {
+    tasks.named("assembleDebug") {
+        dependsOn(copyDebugApkToRoot)
     }
 }
 

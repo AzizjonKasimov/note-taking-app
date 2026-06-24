@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.azizjon.notes.update.UpdatePrompt
+import com.azizjon.notes.ui.theme.AppThemeMode
 
 object Routes {
     const val LIST = "list"
@@ -19,7 +20,10 @@ object Routes {
 
 /** App entry composable: owns the nav graph and the shared [NotesViewModel]. */
 @Composable
-fun NotesApp() {
+fun NotesApp(
+    themeMode: AppThemeMode,
+    onThemeModeChange: (AppThemeMode) -> Unit,
+) {
     val navController = rememberNavController()
     val viewModel: NotesViewModel = viewModel(factory = NotesViewModel.Factory)
 
@@ -46,6 +50,8 @@ fun NotesApp() {
         composable(Routes.BACKUP) {
             BackupScreen(
                 viewModel = viewModel,
+                themeMode = themeMode,
+                onThemeModeChange = onThemeModeChange,
                 onBack = { navController.popBackStack() },
             )
         }

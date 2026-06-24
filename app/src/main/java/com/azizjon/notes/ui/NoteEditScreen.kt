@@ -64,7 +64,7 @@ fun NoteEditScreen(
     val richTextState = rememberRichTextState()
 
     val linkColor = MaterialTheme.colorScheme.primary
-    LaunchedEffect(Unit) {
+    LaunchedEffect(linkColor) {
         richTextState.config.linkColor = linkColor
         richTextState.config.linkTextDecoration = TextDecoration.Underline
     }
@@ -200,6 +200,9 @@ fun NoteEditScreen(
                 // Read view: the default platform UriHandler makes links tappable (opens the browser).
                 BasicRichText(
                     state = richTextState,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)

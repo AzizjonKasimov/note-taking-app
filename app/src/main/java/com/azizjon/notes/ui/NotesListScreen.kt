@@ -120,7 +120,7 @@ fun NotesListScreen(
                                 Icon(Icons.Filled.Search, contentDescription = "Search")
                             }
                             IconButton(onClick = onOpenBackup) {
-                                Icon(Icons.Filled.Settings, contentDescription = "Backup & restore")
+                                Icon(Icons.Filled.Settings, contentDescription = "Settings")
                             }
                         },
                     )

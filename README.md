@@ -7,7 +7,7 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 - List, create, edit, and delete notes
 - Search across titles and content
 - Swipe a note to delete
-- Light / dark theme with Android 12+ dynamic color
+- Light / dark theme with Android 12+ dynamic color and an in-app theme override
 - Local storage (Room) + one-tap backup/restore to a file in your Google Drive — no account or setup
 - In-app auto-update from GitHub Releases
 
@@ -40,6 +40,7 @@ must point `sdk.dir` at your SDK (it is gitignored).
 
 ```powershell
 # Debug APK -> app/build/outputs/apk/debug/app-debug.apk
+# Convenience copy for sharing -> Notes-debug.apk in the project root
 .\gradlew.bat assembleDebug
 
 # Install onto a connected device / emulator (USB debugging enabled)
