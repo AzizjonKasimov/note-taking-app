@@ -18,4 +18,6 @@ data class Note(
     @ColumnInfo(defaultValue = "1") val notebookId: Long = DEFAULT_NOTEBOOK_ID,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+    /** Non-null while the note is in Trash. */
+    val deletedAt: Long? = null,
 )

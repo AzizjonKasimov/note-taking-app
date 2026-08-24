@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -27,15 +26,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +56,7 @@ fun NotesListScreen(
     viewModel: NotesViewModel,
     onAddNote: () -> Unit,
     onOpenNote: (Long) -> Unit,
+    onOpenTrash: () -> Unit,
     onOpenBackup: () -> Unit,
 ) {
     val notes by viewModel.notes.collectAsStateWithLifecycle()
@@ -68,6 +64,7 @@ fun NotesListScreen(
     val notebooks by viewModel.notebooks.collectAsStateWithLifecycle()
     val counts by viewModel.notebookCounts.collectAsStateWithLifecycle()
     val selectedNotebookId by viewModel.selectedNotebookId.collectAsStateWithLifecycle()
+    val deletedNotes by viewModel.deletedNotes.collectAsStateWithLifecycle()
     var searching by rememberSaveable { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -93,6 +90,13 @@ fun NotesListScreen(
                 onCreate = viewModel::createNotebook,
                 onRename = viewModel::renameNotebook,
                 onDelete = viewModel::deleteNotebook,
+                trashCount = deletedNotes.size,
+                onOpenTrash = {
+                    scope.launch {
+                        drawerState.close()
+                        onOpenTrash()
+                    }
+                },
             )
         },
     ) {
@@ -151,7 +155,6 @@ fun NotesListScreen(
                         NoteRow(
                             note = note,
                             onClick = { onOpenNote(note.id) },
-                            onDelete = { viewModel.delete(note) },
                         )
                     }
                 }
@@ -191,67 +194,32 @@ private fun SearchField(
 private fun NoteRow(
     note: Note,
     onClick: () -> Unit,
-    onDelete: () -> Unit,
 ) {
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            if (value != SwipeToDismissBoxValue.Settled) {
-                onDelete()
-                true
-            } else {
-                false
-            }
-        },
-    )
-    SwipeToDismissBox(
-        state = dismissState,
-        backgroundContent = {
-            Surface(
-                color = MaterialTheme.colorScheme.errorContainer,
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 20.dp),
-                    contentAlignment = Alignment.CenterEnd,
-                ) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onErrorContainer,
-                    )
-                }
-            }
-        },
-    ) {
-        ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
+    ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                text = note.title.ifBlank { "Untitled" },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (note.content.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    text = note.title.ifBlank { "Untitled" },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
+                    text = contentPreview(note.content),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (note.content.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = contentPreview(note.content),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = formatTimestamp(note.updatedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
             }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = formatTimestamp(note.updatedAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
         }
     }
 }
@@ -281,7 +249,7 @@ private fun transparentFieldColors() = TextFieldDefaults.colors(
     unfocusedIndicatorColor = Color.Transparent,
 )
 
-private fun formatTimestamp(epochMillis: Long): String =
+internal fun formatTimestamp(epochMillis: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(epochMillis))
 
 private val MD_LINK = Regex("""\[([^\]]*)]\([^)]*\)""")
@@ -289,6 +257,6 @@ private val MD_LINE_PREFIX = Regex("""(?m)^\s{0,3}(#{1,6}\s+|>\s+|[-*+]\s+|\d+\.
 private val MD_EMPHASIS = Regex("""[*_`~]""")
 
 /** Best-effort strip of markdown syntax so the 2-line list preview reads as plain text. */
-private fun contentPreview(md: String): String =
+internal fun contentPreview(md: String): String =
     MD_EMPHASIS.replace(MD_LINE_PREFIX.replace(MD_LINK.replace(md) { it.groupValues[1] }, ""), "")
         .trim()

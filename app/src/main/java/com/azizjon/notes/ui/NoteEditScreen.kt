@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -61,6 +62,7 @@ fun NoteEditScreen(
     var notebookId by rememberSaveable { mutableStateOf(DEFAULT_NOTEBOOK_ID) }
     // Existing notes open in a read view (where links are tappable); new notes go straight to editing.
     var editing by rememberSaveable { mutableStateOf(noteId <= 0L) }
+    var showDeleteConfirmation by rememberSaveable { mutableStateOf(false) }
     val richTextState = rememberRichTextState()
 
     val linkColor = MaterialTheme.colorScheme.primary
@@ -123,11 +125,8 @@ fun NoteEditScreen(
                 },
                 actions = {
                     if (noteId > 0) {
-                        IconButton(onClick = {
-                            viewModel.deleteById(noteId)
-                            onDone()
-                        }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                        IconButton(onClick = { showDeleteConfirmation = true }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Move to Trash")
                         }
                     }
                     if (editing) {
@@ -210,6 +209,30 @@ fun NoteEditScreen(
                 )
             }
         }
+    }
+
+    if (showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = { Text("Move note to Trash?") },
+            text = { Text("You can restore it later from Trash.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmation = false
+                        viewModel.moveToTrash(noteId)
+                        onDone()
+                    },
+                ) {
+                    Text("Move to Trash")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 

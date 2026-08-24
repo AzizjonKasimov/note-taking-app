@@ -14,6 +14,7 @@ object Routes {
     const val LIST = "list"
     const val EDIT = "edit"
     const val BACKUP = "backup"
+    const val TRASH = "trash"
     const val ARG_ID = "noteId"
     fun edit(id: Long) = "$EDIT/$id"
 }
@@ -33,6 +34,7 @@ fun NotesApp(
                 viewModel = viewModel,
                 onAddNote = { navController.navigate(Routes.edit(0)) },
                 onOpenNote = { id -> navController.navigate(Routes.edit(id)) },
+                onOpenTrash = { navController.navigate(Routes.TRASH) },
                 onOpenBackup = { navController.navigate(Routes.BACKUP) },
             )
         }
@@ -52,6 +54,12 @@ fun NotesApp(
                 viewModel = viewModel,
                 themeMode = themeMode,
                 onThemeModeChange = onThemeModeChange,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.TRASH) {
+            TrashScreen(
+                viewModel = viewModel,
                 onBack = { navController.popBackStack() },
             )
         }

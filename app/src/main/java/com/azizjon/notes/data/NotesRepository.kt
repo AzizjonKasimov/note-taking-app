@@ -29,9 +29,15 @@ class NotesRepository(private val db: NotesDatabase) {
     suspend fun save(note: Note): Long =
         noteDao.upsert(note.copy(updatedAt = System.currentTimeMillis()))
 
-    suspend fun delete(note: Note) = noteDao.delete(note)
+    fun deletedNotes(): Flow<List<Note>> = noteDao.observeDeleted()
 
-    suspend fun deleteById(id: Long) = noteDao.deleteById(id)
+    suspend fun moveToTrash(id: Long) = noteDao.moveToTrash(id, System.currentTimeMillis())
+
+    suspend fun restore(id: Long) = noteDao.restore(id, System.currentTimeMillis())
+
+    suspend fun deleteForever(id: Long) = noteDao.deleteById(id)
+
+    suspend fun emptyTrash() = noteDao.deleteAllDeleted()
 
     suspend fun allNotes(): List<Note> = noteDao.getAll()
 
@@ -88,4 +94,28 @@ class NotesRepository(private val db: NotesDatabase) {
             if (toWrite.isNotEmpty()) noteDao.upsertAll(toWrite)
         }
     }
+
+    /** Replaces local data with a trusted backup snapshot, preserving the default notebook. */
+    suspend fun replaceBackup(notebooks: List<Notebook>, notes: List<Note>) {
+        db.withTransaction {
+            noteDao.deleteAll()
+            notebookDao.deleteAll()
+
+            val safeNotebooks = notebooks.ensureDefaultNotebook()
+            notebookDao.upsertAll(safeNotebooks)
+
+            val knownIds = safeNotebooks.mapTo(HashSet()) { it.id }
+            val safeNotes = notes.map { note ->
+                if (note.notebookId in knownIds) note else note.copy(notebookId = DEFAULT_NOTEBOOK_ID)
+            }
+            if (safeNotes.isNotEmpty()) noteDao.upsertAll(safeNotes)
+        }
+    }
+
+    private fun List<Notebook>.ensureDefaultNotebook(): List<Notebook> =
+        if (any { it.id == DEFAULT_NOTEBOOK_ID }) {
+            this
+        } else {
+            listOf(Notebook(id = DEFAULT_NOTEBOOK_ID, name = DEFAULT_NOTEBOOK_NAME)) + this
+        }
 }

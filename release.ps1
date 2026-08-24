@@ -12,7 +12,7 @@
     The version bump in THIS repo is left uncommitted for you to review and commit.
 
 .EXAMPLE
-    .\release.ps1 -VersionName 1.2 -VersionCode 3 -Notes "Added Google Drive backup"
+    .\release.ps1 -VersionName 1.7 -VersionCode 8 -Notes "Added GitHub SQL backup"
 #>
 param(
     [Parameter(Mandatory = $true)][string]$VersionName,

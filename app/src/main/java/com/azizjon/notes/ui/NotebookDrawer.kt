@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -58,6 +59,8 @@ fun NotebookDrawerSheet(
     onCreate: (String) -> Unit,
     onRename: (Long, String) -> Unit,
     onDelete: (Long) -> Unit,
+    trashCount: Int,
+    onOpenTrash: () -> Unit,
 ) {
     var showCreate by rememberSaveable { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<Notebook?>(null) }
@@ -104,6 +107,14 @@ fun NotebookDrawerSheet(
                 selected = false,
                 leadingIcon = Icons.Filled.Add,
                 onClick = { showCreate = true },
+            )
+
+            DrawerRow(
+                label = "Trash",
+                count = trashCount,
+                selected = false,
+                leadingIcon = Icons.Filled.Delete,
+                onClick = onOpenTrash,
             )
 
             Spacer(Modifier.height(12.dp))

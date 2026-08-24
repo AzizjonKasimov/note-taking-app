@@ -1,6 +1,5 @@
 package com.azizjon.notes.ui
 
-import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -9,7 +8,9 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.azizjon.notes.NotesApplication
 import com.azizjon.notes.backup.BackupData
-import com.azizjon.notes.backup.BackupManager
+import com.azizjon.notes.backup.GitHubBackupConfig
+import com.azizjon.notes.backup.GitHubBackupSettings
+import com.azizjon.notes.backup.GitHubSqlBackupManager
 import com.azizjon.notes.data.Note
 import com.azizjon.notes.data.Notebook
 import com.azizjon.notes.data.NotesRepository
@@ -27,15 +28,18 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class BackupUiState(
-    val configured: Boolean = false,
+    val config: GitHubBackupConfig = GitHubBackupConfig(),
     val lastBackupAt: Long = 0L,
     val inProgress: Boolean = false,
     val message: String? = null,
-)
+) {
+    val configured: Boolean get() = config.configured
+}
 
 class NotesViewModel(
     private val repository: NotesRepository,
-    private val backup: BackupManager,
+    private val backupSettings: GitHubBackupSettings,
+    private val githubBackup: GitHubSqlBackupManager,
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -59,8 +63,12 @@ class NotesViewModel(
             .flatMapLatest { (id, q) -> repository.notes(id, q) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val deletedNotes: StateFlow<List<Note>> =
+        repository.deletedNotes()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private val _backupState = MutableStateFlow(
-        BackupUiState(configured = backup.isConfigured, lastBackupAt = backup.lastBackupAt),
+        BackupUiState(config = backupSettings.config, lastBackupAt = backupSettings.lastBackupAt),
     )
     val backupState: StateFlow<BackupUiState> = _backupState.asStateFlow()
 
@@ -92,16 +100,30 @@ class NotesViewModel(
         }
     }
 
-    fun delete(note: Note) {
+    fun moveToTrash(id: Long) {
         viewModelScope.launch {
-            repository.delete(note)
+            repository.moveToTrash(id)
             scheduleAutoBackup()
         }
     }
 
-    fun deleteById(id: Long) {
+    fun restore(note: Note) {
         viewModelScope.launch {
-            repository.deleteById(id)
+            repository.restore(note.id)
+            scheduleAutoBackup()
+        }
+    }
+
+    fun deleteForever(note: Note) {
+        viewModelScope.launch {
+            repository.deleteForever(note.id)
+            scheduleAutoBackup()
+        }
+    }
+
+    fun emptyTrash() {
+        viewModelScope.launch {
+            repository.emptyTrash()
             scheduleAutoBackup()
         }
     }
@@ -135,58 +157,60 @@ class NotesViewModel(
 
     // ---- Backup / restore ----
 
-    /** Called after the user picks a Drive file location: persists access and backs up now. */
-    fun onBackupTargetChosen(uri: Uri) {
-        backup.saveTarget(uri)
+    fun saveBackupSettings(config: GitHubBackupConfig) {
+        backupSettings.save(config)
         refreshBackupState()
-        backupNow()
+        _backupState.update { it.copy(message = "GitHub backup settings saved") }
     }
 
     fun backupNow() {
         viewModelScope.launch {
+            if (_backupState.value.inProgress) return@launch
+            val config = backupSettings.config
             _backupState.update { it.copy(inProgress = true, message = null) }
-            val ok = backup.backup(snapshot())
-            _backupState.update {
-                it.copy(
-                    inProgress = false,
-                    configured = backup.isConfigured,
-                    lastBackupAt = backup.lastBackupAt,
-                    message = if (ok) "Backed up to Drive" else "Backup failed",
-                )
+            try {
+                val result = githubBackup.backup(config, snapshot())
+                refreshBackupState()
+                _backupState.update {
+                    it.copy(
+                        inProgress = false,
+                        message = "GitHub backed up ${result.notes} note(s)",
+                    )
+                }
+            } catch (e: Exception) {
+                _backupState.update {
+                    it.copy(
+                        inProgress = false,
+                        message = e.message ?: e::class.java.simpleName,
+                    )
+                }
             }
         }
     }
 
-    /** Restore from the already-configured backup file. */
+    /** Restore from the configured GitHub SQL backup. */
     fun restore() {
         viewModelScope.launch {
+            if (_backupState.value.inProgress) return@launch
+            val config = backupSettings.config
             _backupState.update { it.copy(inProgress = true, message = null) }
-            val restored = backup.restore()
-            if (restored != null) repository.importBackup(restored.notebooks, restored.notes)
-            _backupState.update {
-                it.copy(
-                    inProgress = false,
-                    message = if (restored != null) "Restored ${restored.notes.size} notes" else "Restore failed",
-                )
-            }
-        }
-    }
-
-    /** Restore from a file the user picks manually, then remember it for future backups. */
-    fun restoreFromUri(uri: Uri) {
-        viewModelScope.launch {
-            _backupState.update { it.copy(inProgress = true, message = null) }
-            val restored = backup.readFrom(uri)
-            if (restored != null) {
-                repository.importBackup(restored.notebooks, restored.notes)
-                backup.saveTarget(uri)
-            }
-            refreshBackupState()
-            _backupState.update {
-                it.copy(
-                    inProgress = false,
-                    message = if (restored != null) "Restored ${restored.notes.size} notes" else "Restore failed",
-                )
+            try {
+                val restored = githubBackup.restore(config)
+                repository.replaceBackup(restored.notebooks, restored.notes)
+                refreshBackupState()
+                _backupState.update {
+                    it.copy(
+                        inProgress = false,
+                        message = "GitHub restored ${restored.notes.size} note(s)",
+                    )
+                }
+            } catch (e: Exception) {
+                _backupState.update {
+                    it.copy(
+                        inProgress = false,
+                        message = e.message ?: e::class.java.simpleName,
+                    )
+                }
             }
         }
     }
@@ -200,18 +224,19 @@ class NotesViewModel(
 
     /** Debounced: backs up a few seconds after the last change, if a target is configured. */
     private fun scheduleAutoBackup() {
-        if (!backup.isConfigured) return
+        val config = backupSettings.config
+        if (!(config.configured && config.autoBackup)) return
         autoBackupJob?.cancel()
         autoBackupJob = viewModelScope.launch {
             delay(3_000)
-            backup.backup(snapshot())
+            runCatching { githubBackup.backup(config, snapshot()) }
             refreshBackupState()
         }
     }
 
     private fun refreshBackupState() {
         _backupState.update {
-            it.copy(configured = backup.isConfigured, lastBackupAt = backup.lastBackupAt)
+            it.copy(config = backupSettings.config, lastBackupAt = backupSettings.lastBackupAt)
         }
     }
 
@@ -219,7 +244,7 @@ class NotesViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = this[APPLICATION_KEY] as NotesApplication
-                NotesViewModel(app.repository, app.backupManager)
+                NotesViewModel(app.repository, app.githubBackupSettings, app.githubSqlBackupManager)
             }
         }
     }

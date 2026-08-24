@@ -4,24 +4,24 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 
 ## Features
 
-- List, create, edit, and delete notes
+- List, create, edit, and move notes to Trash
 - Search across titles and content
-- Swipe a note to delete
+- Confirm before moving a note to Trash; restore it or explicitly delete it forever
 - Light / dark theme with Android 12+ dynamic color and an in-app theme override
-- Local storage (Room) + one-tap backup/restore to a file in your Google Drive — no account or setup
+- Local storage (Room) + GitHub SQL backup/restore to a private data repo
 - In-app auto-update from GitHub Releases
 
 ## Tech stack
 
 | Area | Choice |
 | --- | --- |
-| Language | Kotlin 2.0 |
+| Language | Kotlin 2.3 |
 | UI | Jetpack Compose, Material 3 |
 | Architecture | MVVM (`NotesViewModel`), manual DI in `NotesApplication` |
 | Persistence | Room (`notes.db`), KSP codegen |
 | Navigation | navigation-compose |
-| Build | Gradle (wrapper), AGP 8.7, version catalog |
-| SDK | minSdk 26, target/compileSdk 35 |
+| Build | Gradle (wrapper), AGP 8.13, version catalog |
+| SDK | minSdk 26, targetSdk 35, compileSdk 36 |
 
 ## Project layout
 
@@ -29,6 +29,7 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 app/src/main/java/com/azizjon/notes/
   MainActivity.kt            # Compose entry point
   NotesApplication.kt        # owns the DB/repository
+  backup/                    # GitHub SQL backup/restore
   data/                      # Note entity, DAO, Room DB, repository
   ui/                        # ViewModel, nav host, list + edit screens, theme
 ```
@@ -51,6 +52,13 @@ To put it on your phone: enable **Developer options → USB debugging**, connect
 then `installDebug` — or copy `app-debug.apk` to the phone and open it (allow installs
 from this source).
 
+## Deletion and recovery
+
+Notes cannot be deleted by swiping the list. Use the trash button inside a note and confirm the
+action; the note moves to **Notebooks -> Trash** and remains there until you restore it or choose
+**Delete forever**. GitHub SQL backups include trashed notes, so restoring a backup preserves the
+same recoverable Trash state.
+
 ## Releasing a new version
 
 Updates reach the phone through the in-app updater, which reads `version.json` from the
@@ -70,15 +78,24 @@ Release builds are signed with `release.keystore` using credentials in `keystore
 (both gitignored). **Back these up** — the same key must sign every update, or installs fail
 with a signature mismatch.
 
-## Backup & restore
+## GitHub SQL backup
 
-Backup uses Android's Storage Access Framework — **no Google account, API keys, or
-permissions**. In the app's **gear** screen, *Set up Drive backup* lets you pick a file in
-your Google Drive once; the app then writes your notes there automatically a few seconds
-after each change (`backup/BackupManager.kt`). *Restore* reads them back — handy on a new
-phone. Notes are merged by id, newest-wins.
+The app can back up the full Room snapshot to GitHub using the Contents API. In the
+app's **gear** screen, GitHub SQL backup defaults to:
+
+- owner: `AzizjonKasimov`
+- repo: `note-taking-app-data`
+- branch: `main`
+- SQL path: `notes.sql`
+
+Create a private data repo, save a fine-grained GitHub token with read/write Contents
+access to that repo, then tap **Save GitHub settings** and **Back up now**. Auto backup
+runs a few seconds after local note/notebook changes when enabled. **Restore from
+GitHub** replaces local notes with the SQL snapshot, which is useful after a fresh
+install. The GitHub token is stored in encrypted preferences and excluded from Android
+cloud/device backup.
 
 ## Status
 
-- Working: notes CRUD, search, swipe-delete, themes, in-app auto-update, Google Drive backup/restore
+- Working: notes CRUD, search, recoverable Trash, themes, in-app auto-update, GitHub SQL backup/restore
 - Backlog: markdown, tags/folders, pin, reminders, share/export

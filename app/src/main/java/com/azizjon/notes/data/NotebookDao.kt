@@ -20,7 +20,10 @@ interface NotebookDao {
     @Query("SELECT * FROM notebooks WHERE id = :id")
     suspend fun getById(id: Long): Notebook?
 
-    @Query("SELECT notebookId, COUNT(*) AS count FROM notes GROUP BY notebookId")
+    @Query(
+        "SELECT notebookId, COUNT(*) AS count FROM notes " +
+            "WHERE deletedAt IS NULL GROUP BY notebookId",
+    )
     fun observeCounts(): Flow<List<NotebookCount>>
 
     @Upsert
@@ -31,4 +34,7 @@ interface NotebookDao {
 
     @Query("DELETE FROM notebooks WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM notebooks")
+    suspend fun deleteAll()
 }
