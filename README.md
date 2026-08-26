@@ -5,7 +5,9 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 ## Features
 
 - List, create, edit, and move notes to Trash
+- Crash-safe local autosave with resumable editing after the app is closed or killed
 - Search across titles and content
+- Visual notebook markers: automatic initials, colored folders, emoji, preset covers, or cropped gallery photos
 - Confirm before moving a note to Trash; restore it or explicitly delete it forever
 - Light / dark theme with Android 12+ dynamic color and an in-app theme override
 - Local storage (Room) + GitHub SQL backup/restore to a private data repo
@@ -30,8 +32,8 @@ app/src/main/java/com/azizjon/notes/
   MainActivity.kt            # Compose entry point
   NotesApplication.kt        # owns the DB/repository
   backup/                    # GitHub SQL backup/restore
-  data/                      # Note entity, DAO, Room DB, repository
-  ui/                        # ViewModel, nav host, list + edit screens, theme
+  data/                      # Entities, Room, repository, and private marker images
+  ui/                        # Screens, marker picker/cropper, navigation, and theme
 ```
 
 ## Build & run
@@ -58,6 +60,30 @@ Notes cannot be deleted by swiping the list. Use the trash button inside a note 
 action; the note moves to **Notebooks -> Trash** and remains there until you restore it or choose
 **Delete forever**. GitHub SQL backups include trashed notes, so restoring a backup preserves the
 same recoverable Trash state.
+
+## Autosave and editor recovery
+
+Editing is local-first: a new note receives its permanent Room database ID before the editor opens,
+then title, rich Markdown content, formatting, and notebook changes are saved after 350 ms of idle
+time and at least every two seconds during uninterrupted typing. Moving the app to the background
+also requests an immediate local flush. GitHub auto backup remains separately debounced and starts
+only after a local Room write succeeds, so it does not make a network request for every keystroke.
+
+If Android closes the app while an editor is active, the app validates that note and reopens it in
+edit mode on the next cold launch. **Back** and **Done** both wait for the latest local write and end
+that resumable session; Done returns an existing note to read view, while Back (and Done on a newly
+created note) returns to the list. A failed write keeps the editor open with Retry and an explicit
+discard-and-leave option. Untouched empty new drafts are cleaned up, but clearing an existing note
+never deletes its row.
+
+## Notebook appearance
+
+Every notebook starts with a stable colored initial. Open **Notebooks**, use a notebook's overflow
+menu, and choose **Appearance** to switch to a colored folder, initial, emoji, one of twelve bundled
+photo covers, or a photo from the Android system picker. Gallery photos can be positioned with
+pinch-to-zoom and drag before saving. The app keeps an optimized full-frame editing source (up to
+2048 px) and a 256 px square crop in private app storage; it never needs broad photo-library
+permission.
 
 ## Releasing a new version
 
@@ -95,7 +121,12 @@ GitHub** replaces local notes with the SQL snapshot, which is useful after a fre
 install. The GitHub token is stored in encrypted preferences and excluded from Android
 cloud/device backup.
 
+Custom notebook photos are backed up beside the configured SQL file under
+`notebook-images/<notebook-id>/source.webp` and `crop.webp`. Image files are uploaded before
+`notes.sql`, and restore falls back to the notebook's automatic initial if no usable crop is
+available. Bundled photo covers need no extra backup files.
+
 ## Status
 
-- Working: notes CRUD, search, recoverable Trash, themes, in-app auto-update, GitHub SQL backup/restore
+- Working: notes CRUD, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, GitHub SQL backup/restore
 - Backlog: markdown, tags/folders, pin, reminders, share/export

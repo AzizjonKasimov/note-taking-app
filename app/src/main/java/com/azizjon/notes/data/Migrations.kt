@@ -35,3 +35,15 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         db.execSQL("ALTER TABLE notes ADD COLUMN deletedAt INTEGER")
     }
 }
+
+/** v3 -> v4: add visual notebook marker metadata; existing notebooks use automatic initials. */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE notebooks ADD COLUMN markerType TEXT NOT NULL DEFAULT 'AUTO'")
+        db.execSQL("ALTER TABLE notebooks ADD COLUMN markerColor INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE notebooks ADD COLUMN markerValue TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE notebooks ADD COLUMN cropLeft REAL NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE notebooks ADD COLUMN cropTop REAL NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE notebooks ADD COLUMN cropSize REAL NOT NULL DEFAULT 1")
+    }
+}

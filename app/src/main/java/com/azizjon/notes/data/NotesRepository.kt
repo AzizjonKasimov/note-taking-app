@@ -29,6 +29,33 @@ class NotesRepository(private val db: NotesDatabase) {
     suspend fun save(note: Note): Long =
         noteDao.upsert(note.copy(updatedAt = System.currentTimeMillis()))
 
+    /** Creates the real Room row before navigation opens a new-note editor. */
+    suspend fun createDraft(notebookId: Long): Note {
+        val draft = Note(notebookId = notebookId)
+        val id = save(draft)
+        return draft.copy(id = id)
+    }
+
+    /** Updates the one row owned by an active editor session. */
+    suspend fun saveDraft(snapshot: EditorSnapshot) {
+        require(snapshot.noteId > 0L) { "A draft must have a persisted note id" }
+        val existing = noteDao.getById(snapshot.noteId)
+            ?: error("Note ${snapshot.noteId} no longer exists")
+        save(
+            existing.copy(
+                title = snapshot.title,
+                content = snapshot.content,
+                notebookId = snapshot.notebookId,
+            ),
+        )
+    }
+
+    /** Removes only a genuinely untouched new draft; cleared existing notes use a different path. */
+    suspend fun discardEmptyDraft(id: Long) {
+        val note = noteDao.getById(id) ?: return
+        if (note.title.isBlank() && note.content.isBlank()) noteDao.deleteById(id)
+    }
+
     fun deletedNotes(): Flow<List<Note>> = noteDao.observeDeleted()
 
     suspend fun moveToTrash(id: Long) = noteDao.moveToTrash(id, System.currentTimeMillis())
@@ -58,6 +85,11 @@ class NotesRepository(private val db: NotesDatabase) {
         if (id == DEFAULT_NOTEBOOK_ID) return
         val existing = notebookDao.getById(id) ?: return
         notebookDao.upsert(existing.copy(name = name.trim()))
+    }
+
+    suspend fun updateNotebookAppearance(id: Long, appearance: NotebookAppearance) {
+        val existing = notebookDao.getById(id) ?: return
+        notebookDao.upsert(existing.withAppearance(appearance))
     }
 
     /** Deletes [id] and moves its notes to the default notebook. The default can't be deleted. */

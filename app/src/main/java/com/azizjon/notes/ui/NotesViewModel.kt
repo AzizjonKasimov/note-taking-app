@@ -1,5 +1,7 @@
 package com.azizjon.notes.ui
 
+import android.graphics.Bitmap
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -11,8 +13,16 @@ import com.azizjon.notes.backup.BackupData
 import com.azizjon.notes.backup.GitHubBackupConfig
 import com.azizjon.notes.backup.GitHubBackupSettings
 import com.azizjon.notes.backup.GitHubSqlBackupManager
+import com.azizjon.notes.data.ActiveEditorSession
+import com.azizjon.notes.data.ActiveEditorSessionStore
+import com.azizjon.notes.data.DEFAULT_NOTEBOOK_ID
+import com.azizjon.notes.data.EditorSnapshot
 import com.azizjon.notes.data.Note
 import com.azizjon.notes.data.Notebook
+import com.azizjon.notes.data.NotebookAppearance
+import com.azizjon.notes.data.NotebookImageStore
+import com.azizjon.notes.data.NotebookMarkerType
+import com.azizjon.notes.data.NormalizedCrop
 import com.azizjon.notes.data.NotesRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -26,6 +36,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class BackupUiState(
     val config: GitHubBackupConfig = GitHubBackupConfig(),
@@ -36,10 +48,18 @@ data class BackupUiState(
     val configured: Boolean get() = config.configured
 }
 
+sealed interface AppStartupState {
+    data object Loading : AppStartupState
+    data object NoteList : AppStartupState
+    data class ResumeEditor(val noteId: Long) : AppStartupState
+}
+
 class NotesViewModel(
     private val repository: NotesRepository,
     private val backupSettings: GitHubBackupSettings,
     private val githubBackup: GitHubSqlBackupManager,
+    private val imageStore: NotebookImageStore,
+    private val editorSessionStore: ActiveEditorSessionStore,
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -74,6 +94,26 @@ class NotesViewModel(
 
     private var autoBackupJob: Job? = null
 
+    private val autosave = EditorAutosaveCoordinator(
+        scope = viewModelScope,
+        writer = repository::saveDraft,
+        onSuccessfulWrite = ::scheduleAutoBackup,
+    )
+    val editorSaveStatus: StateFlow<EditorSaveStatus> = autosave.status
+
+    private val _activeEditorSession = MutableStateFlow(editorSessionStore.read())
+    val activeEditorSession: StateFlow<ActiveEditorSession?> = _activeEditorSession.asStateFlow()
+
+    private val _startupState = MutableStateFlow<AppStartupState>(AppStartupState.Loading)
+    val startupState: StateFlow<AppStartupState> = _startupState.asStateFlow()
+
+    private val finishEditorMutex = Mutex()
+    @Volatile private var acceptingEditorSnapshots = false
+
+    init {
+        viewModelScope.launch { resolveStartupState() }
+    }
+
     fun onQueryChange(value: String) {
         _query.value = value
     }
@@ -84,24 +124,106 @@ class NotesViewModel(
 
     suspend fun load(id: Long): Note? = repository.getById(id)
 
-    /** Persists a note into [notebookId]. [id] <= 0 creates a new note; otherwise updates it. */
-    fun save(id: Long, title: String, content: String, notebookId: Long) {
-        viewModelScope.launch {
-            val base = if (id > 0) repository.getById(id) ?: Note() else Note()
-            repository.save(
-                base.copy(
-                    id = if (id > 0) id else 0,
-                    title = title.trim(),
-                    content = content,
-                    notebookId = notebookId,
-                ),
-            )
+    fun currentEditorSnapshot(noteId: Long): EditorSnapshot? =
+        autosave.latestSnapshot()?.takeIf { it.noteId == noteId }
+
+    /** Creates the database row and durable session breadcrumb before editor navigation. */
+    suspend fun createDraft(): Long {
+        val draft = repository.createDraft(_selectedNotebookId.value ?: DEFAULT_NOTEBOOK_ID)
+        val session = ActiveEditorSession(noteId = draft.id, isNew = true)
+        if (!editorSessionStore.write(session)) {
+            repository.discardEmptyDraft(draft.id)
+            error("Could not start an editing session")
+        }
+        _activeEditorSession.value = session
+        return draft.id
+    }
+
+    /** Starts observing only after the screen has loaded a real note snapshot. */
+    fun beginEditing(noteId: Long, isNew: Boolean, snapshot: EditorSnapshot): Boolean {
+        require(noteId > 0L && snapshot.noteId == noteId)
+        val session = ActiveEditorSession(noteId, isNew)
+        if (!editorSessionStore.write(session)) {
+            autosave.reportError()
+            return false
+        }
+        _activeEditorSession.value = session
+        // A configuration change reuses the live coordinator; resetting its revision counter
+        // while a Room write is in flight could make later revisions look older.
+        if (autosave.latestSnapshot()?.noteId != noteId) autosave.begin(snapshot)
+        acceptingEditorSnapshots = true
+        return true
+    }
+
+    fun submitEditorSnapshot(snapshot: EditorSnapshot) {
+        if (acceptingEditorSnapshots && _activeEditorSession.value?.noteId == snapshot.noteId) {
+            autosave.submit(snapshot)
+        }
+    }
+
+    /** Flushes Room, cleans an untouched new draft, then durably ends the resumable session. */
+    suspend fun flushAndFinishEditor(): Boolean = finishEditorMutex.withLock {
+        val session = _activeEditorSession.value ?: return@withLock true
+        acceptingEditorSnapshots = false
+        if (autosave.flush().isFailure) {
+            acceptingEditorSnapshots = true
+            return@withLock false
+        }
+
+        if (!editorSessionStore.clear()) {
+            acceptingEditorSnapshots = true
+            autosave.reportError()
+            return@withLock false
+        }
+        try {
+            if (session.isNew) repository.discardEmptyDraft(session.noteId)
+        } catch (_: Exception) {
+            editorSessionStore.write(session)
+            acceptingEditorSnapshots = true
+            autosave.reportError()
+            return@withLock false
+        }
+        _activeEditorSession.value = null
+        autosave.endSession()
+        if (session.isNew) scheduleAutoBackup()
+        true
+    }
+
+    fun retryEditorSave() {
+        viewModelScope.launch { autosave.retry() }
+    }
+
+    /** Flushes without ending the session, used when Android backgrounds the app. */
+    fun flushEditorOnStop() {
+        viewModelScope.launch { autosave.flush() }
+    }
+
+    /** Explicitly abandons only the unsaved in-memory revision and leaves the last Room value. */
+    suspend fun discardEditorChangesAndFinish() = finishEditorMutex.withLock {
+        val session = _activeEditorSession.value
+        acceptingEditorSnapshots = false
+        autosave.endSession()
+        if (session?.isNew == true) {
+            repository.discardEmptyDraft(session.noteId)
             scheduleAutoBackup()
         }
+        editorSessionStore.clear()
+        _activeEditorSession.value = null
+    }
+
+    /** Waits out any in-flight write so it cannot recreate the note after the trash operation. */
+    suspend fun moveToTrashAndFinishEditor(id: Long) = finishEditorMutex.withLock {
+        acceptingEditorSnapshots = false
+        autosave.endSession()
+        repository.moveToTrash(id)
+        editorSessionStore.clearIf(id)
+        if (_activeEditorSession.value?.noteId == id) _activeEditorSession.value = null
+        scheduleAutoBackup()
     }
 
     fun moveToTrash(id: Long) {
         viewModelScope.launch {
+            clearEditorSessionIf(id)
             repository.moveToTrash(id)
             scheduleAutoBackup()
         }
@@ -109,6 +231,7 @@ class NotesViewModel(
 
     fun restore(note: Note) {
         viewModelScope.launch {
+            clearEditorSessionIf(note.id)
             repository.restore(note.id)
             scheduleAutoBackup()
         }
@@ -116,6 +239,7 @@ class NotesViewModel(
 
     fun deleteForever(note: Note) {
         viewModelScope.launch {
+            clearEditorSessionIf(note.id)
             repository.deleteForever(note.id)
             scheduleAutoBackup()
         }
@@ -146,9 +270,31 @@ class NotesViewModel(
         }
     }
 
+    fun updateNotebookAppearance(id: Long, appearance: NotebookAppearance) {
+        viewModelScope.launch {
+            repository.updateNotebookAppearance(id, appearance)
+            if (appearance.type != NotebookMarkerType.CUSTOM_PHOTO) imageStore.delete(id)
+            scheduleAutoBackup()
+        }
+    }
+
+    suspend fun decodePickedPhoto(uri: Uri): Bitmap = imageStore.decodePickedPhoto(uri)
+
+    suspend fun loadCustomPhotoSource(id: Long): Bitmap? = imageStore.loadSource(id)
+
+    suspend fun saveCustomPhoto(id: Long, source: Bitmap, crop: NormalizedCrop) {
+        imageStore.saveCustomPhoto(id, source, crop)
+        repository.updateNotebookAppearance(
+            id,
+            NotebookAppearance(type = NotebookMarkerType.CUSTOM_PHOTO, crop = crop),
+        )
+        scheduleAutoBackup()
+    }
+
     fun deleteNotebook(id: Long) {
         viewModelScope.launch {
             repository.deleteNotebook(id)
+            imageStore.delete(id)
             // Fall back to "All notes" if the deleted notebook was the active view.
             if (_selectedNotebookId.value == id) _selectedNotebookId.value = null
             scheduleAutoBackup()
@@ -172,9 +318,14 @@ class NotesViewModel(
                 val result = githubBackup.backup(config, snapshot())
                 refreshBackupState()
                 _backupState.update {
+                    val warning = if (result.cleanupWarnings > 0) {
+                        "; ${result.cleanupWarnings} old image(s) could not be cleaned up"
+                    } else {
+                        ""
+                    }
                     it.copy(
                         inProgress = false,
-                        message = "GitHub backed up ${result.notes} note(s)",
+                        message = "GitHub backed up ${result.notes} note(s) and ${result.imagesUploaded} changed image(s)$warning",
                     )
                 }
             } catch (e: Exception) {
@@ -195,13 +346,28 @@ class NotesViewModel(
             val config = backupSettings.config
             _backupState.update { it.copy(inProgress = true, message = null) }
             try {
+                clearEditorSession()
                 val restored = githubBackup.restore(config)
-                repository.replaceBackup(restored.notebooks, restored.notes)
+                val prepared = imageStore.prepareRestore(restored.data.notebooks, restored.media)
+                try {
+                    repository.replaceBackup(prepared.notebooks, restored.data.notes)
+                    imageStore.commitRestore(prepared)
+                } catch (e: Exception) {
+                    imageStore.discardRestore(prepared)
+                    throw e
+                }
+                _selectedNotebookId.value = null
                 refreshBackupState()
                 _backupState.update {
+                    val warningCount = restored.mediaDownloadWarnings + prepared.fallbackCount
+                    val warning = when {
+                        warningCount > 0 -> "; $warningCount notebook photo(s) fell back to initials"
+                        prepared.missingSourceCount > 0 -> "; ${prepared.missingSourceCount} marker source(s) must be reselected to crop again"
+                        else -> ""
+                    }
                     it.copy(
                         inProgress = false,
-                        message = "GitHub restored ${restored.notes.size} note(s)",
+                        message = "GitHub restored ${restored.data.notes.size} note(s)$warning",
                     )
                 }
             } catch (e: Exception) {
@@ -221,6 +387,40 @@ class NotesViewModel(
 
     private suspend fun snapshot(): BackupData =
         BackupData(notebooks = repository.allNotebooks(), notes = repository.allNotes())
+
+    private suspend fun resolveStartupState() {
+        val session = editorSessionStore.read()
+        if (session == null) {
+            _activeEditorSession.value = null
+            _startupState.value = AppStartupState.NoteList
+            return
+        }
+
+        val note = repository.getById(session.noteId)
+        if (note == null || (session.isNew && note.title.isBlank() && note.content.isBlank())) {
+            if (session.isNew) repository.discardEmptyDraft(session.noteId)
+            editorSessionStore.clear()
+            _activeEditorSession.value = null
+            _startupState.value = AppStartupState.NoteList
+            return
+        }
+
+        _activeEditorSession.value = session
+        _startupState.value = AppStartupState.ResumeEditor(session.noteId)
+    }
+
+    private suspend fun clearEditorSessionIf(noteId: Long) {
+        if (_activeEditorSession.value?.noteId == noteId || editorSessionStore.read()?.noteId == noteId) {
+            clearEditorSession()
+        }
+    }
+
+    private suspend fun clearEditorSession() {
+        acceptingEditorSnapshots = false
+        autosave.endSession()
+        editorSessionStore.clear()
+        _activeEditorSession.value = null
+    }
 
     /** Debounced: backs up a few seconds after the last change, if a target is configured. */
     private fun scheduleAutoBackup() {
@@ -244,7 +444,13 @@ class NotesViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = this[APPLICATION_KEY] as NotesApplication
-                NotesViewModel(app.repository, app.githubBackupSettings, app.githubSqlBackupManager)
+                NotesViewModel(
+                    app.repository,
+                    app.githubBackupSettings,
+                    app.githubSqlBackupManager,
+                    app.notebookImageStore,
+                    app.activeEditorSessionStore,
+                )
             }
         }
     }

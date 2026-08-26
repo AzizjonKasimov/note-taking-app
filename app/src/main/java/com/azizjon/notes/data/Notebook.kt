@@ -1,5 +1,6 @@
 package com.azizjon.notes.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -16,4 +17,10 @@ data class Notebook(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String = "",
     val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "'AUTO'") val markerType: String = NotebookMarkerType.AUTO.name,
+    @ColumnInfo(defaultValue = "0") val markerColor: Int = 0,
+    @ColumnInfo(defaultValue = "''") val markerValue: String = "",
+    @ColumnInfo(defaultValue = "0") val cropLeft: Float = 0f,
+    @ColumnInfo(defaultValue = "0") val cropTop: Float = 0f,
+    @ColumnInfo(defaultValue = "1") val cropSize: Float = 1f,
 )

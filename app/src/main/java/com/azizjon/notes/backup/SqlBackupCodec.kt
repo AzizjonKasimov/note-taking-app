@@ -23,7 +23,13 @@ object SqlBackupCodec {
             CREATE TABLE `notebooks` (
                 `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                 `name` TEXT NOT NULL,
-                `createdAt` INTEGER NOT NULL
+                `createdAt` INTEGER NOT NULL,
+                `markerType` TEXT NOT NULL DEFAULT 'AUTO',
+                `markerColor` INTEGER NOT NULL DEFAULT 0,
+                `markerValue` TEXT NOT NULL DEFAULT '',
+                `cropLeft` REAL NOT NULL DEFAULT 0,
+                `cropTop` REAL NOT NULL DEFAULT 0,
+                `cropSize` REAL NOT NULL DEFAULT 1
             );
             """.trimIndent(),
         )
@@ -45,11 +51,17 @@ object SqlBackupCodec {
         val notebooks = data.notebooks.ensureDefaultNotebook()
         notebooks.sortedBy { it.id }.forEach { notebook ->
             appendLine(
-                "INSERT INTO `notebooks` (`id`,`name`,`createdAt`) VALUES (" +
+                "INSERT INTO `notebooks` (`id`,`name`,`createdAt`,`markerType`,`markerColor`,`markerValue`,`cropLeft`,`cropTop`,`cropSize`) VALUES (" +
                     listOf(
                         notebook.id.sql(),
                         notebook.name.sql(),
                         notebook.createdAt.sql(),
+                        notebook.markerType.sql(),
+                        notebook.markerColor.sql(),
+                        notebook.markerValue.sql(),
+                        notebook.cropLeft.sql(),
+                        notebook.cropTop.sql(),
+                        notebook.cropSize.sql(),
                     ).joinToString(",") +
                     ");",
             )
@@ -128,6 +140,12 @@ object SqlBackupCodec {
                                 id = cursor.long("id"),
                                 name = cursor.string("name"),
                                 createdAt = cursor.long("createdAt"),
+                                markerType = cursor.string("markerType", "AUTO"),
+                                markerColor = cursor.int("markerColor"),
+                                markerValue = cursor.string("markerValue"),
+                                cropLeft = cursor.float("cropLeft"),
+                                cropTop = cursor.float("cropTop"),
+                                cropSize = cursor.float("cropSize", 1f),
                             ),
                         )
                     }
@@ -198,6 +216,16 @@ object SqlBackupCodec {
         return if (i < 0 || isNull(i)) fallback else getLong(i)
     }
 
+    private fun Cursor.int(name: String, fallback: Int = 0): Int {
+        val i = index(name)
+        return if (i < 0 || isNull(i)) fallback else getInt(i)
+    }
+
+    private fun Cursor.float(name: String, fallback: Float = 0f): Float {
+        val i = index(name)
+        return if (i < 0 || isNull(i)) fallback else getFloat(i)
+    }
+
     private fun Cursor.nullableLong(name: String): Long? {
         val i = index(name)
         return if (i < 0 || isNull(i)) null else getLong(i)
@@ -205,4 +233,6 @@ object SqlBackupCodec {
 
     private fun String.sql(): String = "'${replace("'", "''")}'"
     private fun Long.sql(): String = toString()
+    private fun Int.sql(): String = toString()
+    private fun Float.sql(): String = toString()
 }

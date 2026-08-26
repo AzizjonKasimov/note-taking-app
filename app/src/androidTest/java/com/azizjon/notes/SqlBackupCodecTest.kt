@@ -9,6 +9,7 @@ import com.azizjon.notes.data.DEFAULT_NOTEBOOK_ID
 import com.azizjon.notes.data.DEFAULT_NOTEBOOK_NAME
 import com.azizjon.notes.data.Note
 import com.azizjon.notes.data.Notebook
+import com.azizjon.notes.data.NotebookMarkerType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -63,5 +64,55 @@ class SqlBackupCodecTest {
 
         assertEquals("Legacy", restored.notes.single().title)
         assertNull(restored.notes.single().deletedAt)
+    }
+
+    @Test
+    fun roundTrip_preservesNotebookAppearance() {
+        val notebook = Notebook(
+            id = 9,
+            name = "Ideas",
+            markerType = NotebookMarkerType.EMOJI.name,
+            markerColor = 6,
+            markerValue = "💡",
+            cropLeft = 0.2f,
+            cropTop = 0.1f,
+            cropSize = 0.6f,
+        )
+
+        val restored = SqlBackupCodec.deserialize(
+            context,
+            SqlBackupCodec.serialize(BackupData(notebooks = listOf(notebook), notes = emptyList())),
+        ).notebooks.single { it.id == 9L }
+
+        assertEquals(NotebookMarkerType.EMOJI.name, restored.markerType)
+        assertEquals(6, restored.markerColor)
+        assertEquals("💡", restored.markerValue)
+        assertEquals(0.2f, restored.cropLeft)
+        assertEquals(0.1f, restored.cropTop)
+        assertEquals(0.6f, restored.cropSize)
+    }
+
+    @Test
+    fun deserialize_legacyNotebookTable_defaultsToAutomaticMarker() {
+        val legacySql = """
+            CREATE TABLE notebooks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                name TEXT NOT NULL,
+                createdAt INTEGER NOT NULL
+            );
+            INSERT INTO notebooks (id,name,createdAt) VALUES (2,'Legacy book',100);
+            CREATE TABLE notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                notebookId INTEGER NOT NULL DEFAULT 1,
+                createdAt INTEGER NOT NULL,
+                updatedAt INTEGER NOT NULL
+            );
+        """.trimIndent()
+
+        val notebook = SqlBackupCodec.deserialize(context, legacySql).notebooks.single { it.id == 2L }
+        assertEquals(NotebookMarkerType.AUTO.name, notebook.markerType)
+        assertEquals(1f, notebook.cropSize)
     }
 }

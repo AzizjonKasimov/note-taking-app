@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -66,14 +67,15 @@ fun NotesListScreen(
     val selectedNotebookId by viewModel.selectedNotebookId.collectAsStateWithLifecycle()
     val deletedNotes by viewModel.deletedNotes.collectAsStateWithLifecycle()
     var searching by rememberSaveable { mutableStateOf(false) }
+    var appearanceTargetId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
     // Top-bar title reflects the active notebook, or "All notes" for the unfiltered view.
-    val title = selectedNotebookId
-        ?.let { id -> notebooks.firstOrNull { it.id == id }?.name?.ifBlank { "Untitled" } }
-        ?: "All notes"
+    val selectedNotebook = selectedNotebookId?.let { id -> notebooks.firstOrNull { it.id == id } }
+    val title = selectedNotebook?.name?.ifBlank { "Untitled" } ?: "All notes"
+    val notebooksById = notebooks.associateBy { it.id }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -90,6 +92,12 @@ fun NotesListScreen(
                 onCreate = viewModel::createNotebook,
                 onRename = viewModel::renameNotebook,
                 onDelete = viewModel::deleteNotebook,
+                onAppearance = { notebook ->
+                    scope.launch {
+                        drawerState.close()
+                        appearanceTargetId = notebook.id
+                    }
+                },
                 trashCount = deletedNotes.size,
                 onOpenTrash = {
                     scope.launch {
@@ -113,7 +121,16 @@ fun NotesListScreen(
                     )
                 } else {
                     TopAppBar(
-                        title = { Text(title) },
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (selectedNotebook != null) {
+                                    NotebookMarker(selectedNotebook, 28.dp)
+                                } else {
+                                    AllNotesMarker(28.dp)
+                                }
+                                Text(title, modifier = Modifier.padding(start = 10.dp))
+                            }
+                        },
                         navigationIcon = {
                             IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                 Icon(Icons.Filled.Menu, contentDescription = "Notebooks")
@@ -154,12 +171,22 @@ fun NotesListScreen(
                     items(notes, key = { it.id }) { note ->
                         NoteRow(
                             note = note,
+                            notebook = notebooksById[note.notebookId],
                             onClick = { onOpenNote(note.id) },
                         )
                     }
                 }
             }
         }
+    }
+
+    val appearanceTarget = appearanceTargetId?.let { id -> notebooks.firstOrNull { it.id == id } }
+    if (appearanceTarget != null) {
+        NotebookAppearanceSheet(
+            notebook = appearanceTarget,
+            viewModel = viewModel,
+            onDismiss = { appearanceTargetId = null },
+        )
     }
 }
 
@@ -193,6 +220,7 @@ private fun SearchField(
 @Composable
 private fun NoteRow(
     note: Note,
+    notebook: com.azizjon.notes.data.Notebook?,
     onClick: () -> Unit,
 ) {
     ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
@@ -214,12 +242,29 @@ private fun NoteRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = formatTimestamp(note.updatedAt),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
-            )
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (notebook != null) {
+                    NotebookMarker(notebook, 24.dp)
+                    Text(
+                        text = notebook.name.ifBlank { "Untitled" },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 8.dp, end = 8.dp),
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                Text(
+                    text = formatTimestamp(note.updatedAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
     }
 }

@@ -37,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.azizjon.notes.data.DEFAULT_NOTEBOOK_ID
@@ -59,6 +58,7 @@ fun NotebookDrawerSheet(
     onCreate: (String) -> Unit,
     onRename: (Long, String) -> Unit,
     onDelete: (Long) -> Unit,
+    onAppearance: (Notebook) -> Unit,
     trashCount: Int,
     onOpenTrash: () -> Unit,
 ) {
@@ -79,6 +79,7 @@ fun NotebookDrawerSheet(
                 label = "All notes",
                 count = counts.values.sum(),
                 selected = selectedNotebookId == null,
+                leading = { AllNotesMarker(32.dp) },
                 onClick = { onSelect(null) },
             )
 
@@ -87,16 +88,15 @@ fun NotebookDrawerSheet(
                     label = nb.name.ifBlank { "Untitled" },
                     count = counts[nb.id] ?: 0,
                     selected = selectedNotebookId == nb.id,
+                    leading = { NotebookMarker(nb, 32.dp) },
                     onClick = { onSelect(nb.id) },
-                    trailing = if (nb.id == DEFAULT_NOTEBOOK_ID) {
-                        null
-                    } else {
-                        {
-                            NotebookOverflow(
-                                onRename = { renameTarget = nb },
-                                onDelete = { deleteTarget = nb },
-                            )
-                        }
+                    trailing = {
+                        NotebookOverflow(
+                            canRenameOrDelete = nb.id != DEFAULT_NOTEBOOK_ID,
+                            onAppearance = { onAppearance(nb) },
+                            onRename = { renameTarget = nb },
+                            onDelete = { deleteTarget = nb },
+                        )
                     },
                 )
             }
@@ -105,7 +105,13 @@ fun NotebookDrawerSheet(
                 label = "New notebook",
                 count = null,
                 selected = false,
-                leadingIcon = Icons.Filled.Add,
+                leading = {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
                 onClick = { showCreate = true },
             )
 
@@ -113,7 +119,13 @@ fun NotebookDrawerSheet(
                 label = "Trash",
                 count = trashCount,
                 selected = false,
-                leadingIcon = Icons.Filled.Delete,
+                leading = {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
                 onClick = onOpenTrash,
             )
 
@@ -155,7 +167,7 @@ private fun DrawerRow(
     count: Int?,
     selected: Boolean,
     onClick: () -> Unit,
-    leadingIcon: ImageVector? = null,
+    leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     Surface(
@@ -172,12 +184,8 @@ private fun DrawerRow(
                 .heightIn(min = 48.dp)
                 .padding(start = 16.dp, end = 4.dp),
         ) {
-            if (leadingIcon != null) {
-                Icon(
-                    leadingIcon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            if (leading != null) {
+                leading()
                 Spacer(Modifier.width(12.dp))
             }
             Text(
@@ -203,21 +211,32 @@ private fun DrawerRow(
 }
 
 @Composable
-private fun NotebookOverflow(onRename: () -> Unit, onDelete: () -> Unit) {
+private fun NotebookOverflow(
+    canRenameOrDelete: Boolean,
+    onAppearance: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Filled.MoreVert, contentDescription = "Notebook options")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("Rename") },
-                onClick = { expanded = false; onRename() },
-            )
-            DropdownMenuItem(
-                text = { Text("Delete") },
-                onClick = { expanded = false; onDelete() },
-            )
+            DropdownMenuItem(text = { Text("Appearance") }, onClick = {
+                expanded = false
+                onAppearance()
+            })
+            if (canRenameOrDelete) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    onClick = { expanded = false; onRename() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    onClick = { expanded = false; onDelete() },
+                )
+            }
         }
     }
 }
