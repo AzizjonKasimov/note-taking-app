@@ -5,6 +5,8 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 ## Features
 
 - List, create, edit, and move notes to Trash
+- WYSIWYG Markdown editing with bold, italic, links, numbered/bulleted lists, and nested lists
+- Phone-friendly indent/outdent controls plus automatic formatting of pasted Markdown
 - Crash-safe local autosave with resumable editing after the app is closed or killed
 - Search across titles and content
 - Visual notebook markers: automatic initials, colored folders, emoji, preset covers, or cropped gallery photos
@@ -128,5 +130,5 @@ available. Bundled photo covers need no extra backup files.
 
 ## Status
 
-- Working: notes CRUD, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, GitHub SQL backup/restore
-- Backlog: markdown, tags/folders, pin, reminders, share/export
+- Working: notes CRUD, rich Markdown editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, GitHub SQL backup/restore
+- Backlog: tags, pinning, reminders, share/export

@@ -29,6 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -64,6 +66,16 @@ fun RichTextToolbar(
             }
             ToolButton("•", active = state.isUnorderedList) { state.toggleUnorderedList() }
             ToolButton("1.", active = state.isOrderedList) { state.toggleOrderedList() }
+            ToolButton(
+                label = "⇥",
+                contentDescription = "Increase list indent",
+                enabled = state.canIncreaseListLevel,
+            ) { state.increaseListLevel() }
+            ToolButton(
+                label = "⇤",
+                contentDescription = "Decrease list indent",
+                enabled = state.canDecreaseListLevel,
+            ) { state.decreaseListLevel() }
             ToolButton("Link", active = state.isLink) { showLink = true }
             ToolButton("Paste MD") { showMarkdown = true }
         }
@@ -83,7 +95,7 @@ fun RichTextToolbar(
         MarkdownDialog(
             onConfirm = { raw ->
                 val existing = state.toMarkdown()
-                val incoming = autoLinkify(raw)
+                val incoming = prepareMarkdownForPaste(raw)
                 state.setMarkdown(if (existing.isBlank()) incoming else "$existing\n\n$incoming")
                 showMarkdown = false
             },
@@ -98,14 +110,20 @@ private fun ToolButton(
     active: Boolean = false,
     bold: Boolean = false,
     italic: Boolean = false,
+    contentDescription: String = label,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Box(
         modifier = Modifier
             .padding(horizontal = 2.dp)
             .clip(MaterialTheme.shapes.small)
-            .background(if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-            .clickable(onClick = onClick)
+            .background(
+                if (active && enabled) MaterialTheme.colorScheme.secondaryContainer
+                else Color.Transparent,
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription }
             .sizeIn(minWidth = 44.dp, minHeight = 40.dp)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
@@ -115,7 +133,9 @@ private fun ToolButton(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium,
             fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
-            color = if (active) {
+            color = if (!enabled) {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            } else if (active) {
                 MaterialTheme.colorScheme.onSecondaryContainer
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
@@ -197,12 +217,6 @@ private fun MarkdownDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
-
-private val BARE_URL = Regex("""\bhttps?://[^\s)]+""")
-
-/** Wraps bare URLs as markdown links so they render tappable; skips text that already has md links. */
-private fun autoLinkify(text: String): String =
-    if (text.contains("](")) text else BARE_URL.replace(text) { "[${it.value}](${it.value})" }
 
 private fun normalizeUrl(url: String): String =
     if (url.isBlank() || url.contains("://")) url else "https://$url"
