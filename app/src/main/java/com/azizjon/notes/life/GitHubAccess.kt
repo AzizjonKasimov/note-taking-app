@@ -11,7 +11,7 @@ object GitHubAccess {
 
     data class Account(val login: String, val name: String, val noReplyEmail: String)
 
-    data class RepoRef(val fullName: String, val cloneUrl: String)
+    data class RepoRef(val fullName: String, val cloneUrl: String, val private: Boolean)
 
     class TokenRejected : IOException("GitHub did not accept this token.")
 
@@ -22,14 +22,21 @@ object GitHubAccess {
         return Account(login, name, "${json.getLong("id")}+$login@users.noreply.github.com")
     }
 
-    /** The repos the token can open. A fine-grained token made for one repo lists just that one. */
+    /**
+     * The repos the token can open. A fine-grained token also reads every public repo, so the one
+     * private repo it was made for is the pick when there is exactly one.
+     */
     fun repos(token: String): List<RepoRef> {
         val array = JSONArray(get("https://api.github.com/user/repos?per_page=100&sort=updated", token))
         return (0 until array.length()).map { i ->
             val repo = array.getJSONObject(i)
-            RepoRef(repo.getString("full_name"), repo.getString("clone_url"))
+            RepoRef(repo.getString("full_name"), repo.getString("clone_url"), repo.optBoolean("private"))
         }
     }
+
+    /** The repo to clone when the user named none: the only private one, or the only one. */
+    fun pick(repos: List<RepoRef>): RepoRef? =
+        repos.filter { it.private }.singleOrNull() ?: repos.singleOrNull()
 
     /** "owner/name" or a GitHub URL -> the HTTPS clone URL; anything else is used as given. */
     fun cloneUrl(repo: String): String {

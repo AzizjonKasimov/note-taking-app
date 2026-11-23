@@ -137,13 +137,14 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
                 _connection.value = Connection.Cloning("Checking the token", null)
                 val target = if (repo.isNullOrBlank()) {
                     val repos = GitHubAccess.repos(clean)
-                    when (repos.size) {
-                        1 -> repos.single().cloneUrl
-                        0 -> throw IOException("This token can't open any repo. Give it access to your life repo.")
-                        else -> throw IOException(
-                            "This token opens ${repos.size} repos. Type the one to use, such as owner/life.",
-                        )
-                    }
+                    GitHubAccess.pick(repos)?.cloneUrl ?: throw IOException(
+                        if (repos.none { it.private }) {
+                            "This token can't open a private repo. Give it access to your life repo."
+                        } else {
+                            "This token opens ${repos.count { it.private }} private repos. " +
+                                "Type the one to use, such as owner/life."
+                        },
+                    )
                 } else {
                     GitHubAccess.cloneUrl(repo)
                 }
