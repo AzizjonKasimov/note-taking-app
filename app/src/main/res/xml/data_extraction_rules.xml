@@ -2,8 +2,15 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="github_backup_secrets.xml" />
+        <!-- The speech model is downloaded again, and dictation audio is only kept until its text is saved. -->
+        <exclude domain="external" path="models/" />
+        <exclude domain="file" path="recordings/" />
+        <exclude domain="file" path="voice/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="github_backup_secrets.xml" />
+        <exclude domain="external" path="models/" />
+        <exclude domain="file" path="recordings/" />
+        <exclude domain="file" path="voice/" />
     </device-transfer>
 </data-extraction-rules>

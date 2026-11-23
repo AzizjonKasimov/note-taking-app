@@ -124,6 +124,8 @@ fun BackupScreen(
                 }
             }
 
+            VoiceSettingsCard()
+
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(
                     Modifier.padding(16.dp),

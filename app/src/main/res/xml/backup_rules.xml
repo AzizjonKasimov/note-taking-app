@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <exclude domain="sharedpref" path="github_backup_secrets.xml" />
+    <!-- The speech model (about 660 MB) is downloaded again; it would also overflow Android's 25 MB backup quota. -->
+    <exclude domain="external" path="models/" />
+    <!-- Dictation audio is only kept until its text is saved. -->
+    <exclude domain="file" path="recordings/" />
+    <exclude domain="file" path="voice/" />
 </full-backup-content>

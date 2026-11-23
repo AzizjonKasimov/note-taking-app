@@ -43,7 +43,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -52,10 +54,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.azizjon.notes.R
 import com.azizjon.notes.data.DEFAULT_NOTEBOOK_ID
 import com.azizjon.notes.data.DEFAULT_NOTEBOOK_NAME
 import com.azizjon.notes.data.EditorSnapshot
 import com.azizjon.notes.data.Notebook
+import com.azizjon.notes.voice.placeDictation
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.BasicRichText
 import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
@@ -68,6 +72,7 @@ fun NoteEditScreen(
     viewModel: NotesViewModel,
     noteId: Long,
     onDone: () -> Unit,
+    startVoice: Boolean = false,
 ) {
     val notebooks by viewModel.notebooks.collectAsStateWithLifecycle()
     val saveStatus by viewModel.editorSaveStatus.collectAsStateWithLifecycle()
@@ -82,6 +87,10 @@ fun NoteEditScreen(
     var showDeleteConfirmation by rememberSaveable(noteId) { mutableStateOf(false) }
     var showSaveFailure by rememberSaveable(noteId) { mutableStateOf(false) }
     var finishLeavesScreen by rememberSaveable(noteId) { mutableStateOf(true) }
+    var voiceOpen by rememberSaveable(noteId) { mutableStateOf(false) }
+    var voiceStartedOnOpen by rememberSaveable(noteId) { mutableStateOf(false) }
+    // Dictation goes where the writer tapped; until then it is added at the end as a new paragraph.
+    var cursorPlaced by remember(noteId) { mutableStateOf(false) }
     val richTextState = rememberRichTextState()
 
     fun currentSnapshot() = EditorSnapshot(
@@ -179,6 +188,19 @@ fun NoteEditScreen(
     // Repeated system Back events are consumed while the synchronous finish is in flight.
     BackHandler { requestFinish(leaveScreen = true) }
 
+    val startVoiceNote = rememberMicStarter {
+        if (!editing) editing = viewModel.beginEditing(noteId, false, currentSnapshot())
+        if (editing) voiceOpen = true
+    }
+
+    // A note opened with the list's mic button starts listening right away.
+    LaunchedEffect(loaded) {
+        if (loaded && startVoice && !voiceStartedOnOpen) {
+            voiceStartedOnOpen = true
+            startVoiceNote()
+        }
+    }
+
     val notebookName = notebooks.firstOrNull { it.id == notebookId }?.name?.ifBlank { "Untitled" }
         ?: DEFAULT_NOTEBOOK_NAME
 
@@ -203,6 +225,9 @@ fun NoteEditScreen(
                 actions = {
                     if (editing && loaded) SaveStatusIndicator(saveStatus, viewModel::retryEditorSave)
                     if (loaded) {
+                        IconButton(enabled = !finishing, onClick = startVoiceNote) {
+                            Icon(painterResource(R.drawable.ic_mic), contentDescription = "Voice note")
+                        }
                         IconButton(
                             enabled = !finishing,
                             onClick = { showDeleteConfirmation = true },
@@ -276,7 +301,8 @@ fun NoteEditScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
-                            .padding(top = 8.dp),
+                            .padding(top = 8.dp)
+                            .onFocusChanged { if (it.isFocused) cursorPlaced = true },
                     )
                 } else {
                     if (title.isNotBlank()) {
@@ -313,6 +339,25 @@ fun NoteEditScreen(
                 }
             }
         }
+    }
+
+    if (voiceOpen) {
+        VoiceDialog(
+            onText = { text ->
+                val selection = richTextState.selection
+                if (cursorPlaced && !selection.collapsed) {
+                    richTextState.replaceSelectedText(text.trim())
+                } else {
+                    val place = placeDictation(
+                        noteText = richTextState.annotatedString.text,
+                        cursor = if (cursorPlaced) selection.start else null,
+                        dictated = text,
+                    )
+                    richTextState.addTextAtIndex(place.index, place.text)
+                }
+            },
+            onClose = { voiceOpen = false },
+        )
     }
 
     if (showDeleteConfirmation) {

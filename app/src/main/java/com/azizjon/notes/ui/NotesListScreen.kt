@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -41,11 +42,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.azizjon.notes.R
 import com.azizjon.notes.data.Note
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -56,6 +59,7 @@ import java.util.Date
 fun NotesListScreen(
     viewModel: NotesViewModel,
     onAddNote: () -> Unit,
+    onAddVoiceNote: () -> Unit,
     onOpenNote: (Long) -> Unit,
     onOpenTrash: () -> Unit,
     onOpenBackup: () -> Unit,
@@ -148,8 +152,16 @@ fun NotesListScreen(
                 }
             },
             floatingActionButton = {
-                FloatingActionButton(onClick = onAddNote) {
-                    Icon(Icons.Filled.Add, contentDescription = "New note")
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    SmallFloatingActionButton(onClick = onAddVoiceNote) {
+                        Icon(painterResource(R.drawable.ic_mic), contentDescription = "New voice note")
+                    }
+                    FloatingActionButton(onClick = onAddNote) {
+                        Icon(Icons.Filled.Add, contentDescription = "New note")
+                    }
                 }
             },
         ) { padding ->

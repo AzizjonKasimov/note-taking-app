@@ -1,0 +1,4 @@
+<resources>
+    <!-- Debug builds install beside the released app; a different name tells the two apart. -->
+    <string name="app_name">Notes debug</string>
+</resources>

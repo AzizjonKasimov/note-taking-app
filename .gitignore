@@ -22,3 +22,6 @@ keystore.properties
 
 # Local agent pointer file (kept local, not published)
 /CLAUDE.md
+
+# Speech engine AAR, downloaded by app/build.gradle.kts
+/app/libs/

@@ -14,6 +14,7 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 - Light / dark theme with Android 12+ dynamic color and an in-app theme override
 - Local storage (Room) + GitHub SQL backup/restore to a private data repo
 - In-app auto-update from GitHub Releases
+- Voice notes: speech becomes text on the phone, offline, with an open speech model (see below)
 
 ## Tech stack
 
@@ -24,6 +25,7 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 | Architecture | MVVM (`NotesViewModel`), manual DI in `NotesApplication` |
 | Persistence | Room (`notes.db`), KSP codegen |
 | Navigation | navigation-compose |
+| Speech to text | sherpa-onnx 2.0.3 (ONNX Runtime) with NVIDIA Parakeet TDT 0.6B v2 int8 and Silero VAD |
 | Build | Gradle (wrapper), AGP 8.13, version catalog |
 | SDK | minSdk 26, targetSdk 35, compileSdk 36 |
 
@@ -36,6 +38,8 @@ app/src/main/java/com/azizjon/notes/
   backup/                    # GitHub SQL backup/restore
   data/                      # Entities, Room, repository, and private marker images
   ui/                        # Screens, marker picker/cropper, navigation, and theme
+  voice/                     # Voice notes: recording, the speech model, speech to text
+tools/speech-bench/          # Scores speech models on your own recordings (PC)
 ```
 
 ## Build & run
@@ -55,6 +59,50 @@ must point `sdk.dir` at your SDK (it is gitignored).
 To put it on your phone: enable **Developer options → USB debugging**, connect via USB,
 then `installDebug` — or copy `app-debug.apk` to the phone and open it (allow installs
 from this source).
+
+Debug builds install as a separate app, **Notes debug** (`com.azizjon.notes.debug`), beside the
+released one, so a phone keeps its real notes while a build is tested. They skip the update check.
+
+The speech engine, sherpa-onnx, ships as an AAR on its GitHub release rather than on Maven Central:
+the first build downloads it into `app/libs/` (gitignored) and checks it against the release's
+SHA-256. Release builds include only arm64 native code; debug builds add x86_64 for emulators.
+
+## Voice notes
+
+Tap the mic in a note, or the small mic button above **+** for a new note, and talk for as long as
+you like. The text is added where the cursor is, or as a new paragraph at the end.
+
+- **On the phone, offline.** The first time, the app downloads the speech model once (661 MB, over
+  Wi-Fi, with Android's download manager), pinned to one revision and checked file by file against
+  its SHA-256. Audio never leaves the phone.
+- **Heard while you talk.** The voice detector (Silero VAD) finds pauses, and every finished piece
+  of about 8-20 s is turned into text in the background, so the wait after **Stop** stays short
+  however long the note is. Parakeet loses words on long clips, so pieces are cut inside pauses.
+- **Nothing lost.** The recording is written to a WAV file as it goes and kept until its text is
+  in a note; a recording left by a crash is offered again on the next dictation. A foreground
+  service keeps recording with the screen off, with **Stop** in its notification.
+- **Names.** Settings → Voice notes takes names to spell right (one per line); they are boosted
+  in decoding (sherpa-onnx hotwords with modified beam search).
+
+Measured on 181 recordings of the owner's voice (`tools/speech-bench`): 4.9% word errors with the
+names list (5.4% without), about the same as Whisper large-v3-turbo on a desktop GPU (4.8%), and
+the same text on the phone as on a PC. Newer Parakeet versions (v3, Ultra, Redux) scored worse in
+English on these recordings.
+
+### Choosing or checking a model: `tools/speech-bench`
+
+`speech_bench.py` (a uv script) transcribes a set of your recordings with a sherpa-onnx model on
+the PC, the way the phone runs it, and scores the word errors; `export` writes the recordings in
+the app's format for `TranscriberDeviceTest`, which runs the same check on a phone. Its docstring
+has the commands. Keep recordings, model files, and results out of git (`out/` and `models/` are
+ignored).
+
+### Credits
+
+- [NVIDIA Parakeet TDT 0.6B v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2), CC-BY-4.0,
+  exported for sherpa-onnx by its project.
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), Apache-2.0.
+- [Silero VAD](https://github.com/snakers4/silero-vad), MIT (`app/src/main/assets/silero_vad.onnx`).
 
 ## Deletion and recovery
 

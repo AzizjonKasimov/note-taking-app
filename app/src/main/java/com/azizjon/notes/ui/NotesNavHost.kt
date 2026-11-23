@@ -28,7 +28,8 @@ object Routes {
     const val BACKUP = "backup"
     const val TRASH = "trash"
     const val ARG_ID = "noteId"
-    fun edit(id: Long) = "$EDIT/$id"
+    const val ARG_VOICE = "voice"
+    fun edit(id: Long, voice: Boolean = false) = if (voice) "$EDIT/$id?$ARG_VOICE=true" else "$EDIT/$id"
 }
 
 /** App entry composable: owns the nav graph and the shared [NotesViewModel]. */
@@ -68,36 +69,45 @@ private fun NotesNavGraph(
     val scope = rememberCoroutineScope()
     var creatingDraft by remember { mutableStateOf(false) }
 
+    fun addNote(voice: Boolean) {
+        if (creatingDraft) return
+        creatingDraft = true
+        scope.launch {
+            try {
+                runCatching { viewModel.createDraft() }
+                    .onSuccess { id -> navController.navigate(Routes.edit(id, voice)) }
+            } finally {
+                creatingDraft = false
+            }
+        }
+    }
+
     NavHost(navController = navController, startDestination = startDestination) {
         composable(Routes.LIST) {
             NotesListScreen(
                 viewModel = viewModel,
-                onAddNote = {
-                    if (!creatingDraft) {
-                        creatingDraft = true
-                        scope.launch {
-                            try {
-                                runCatching { viewModel.createDraft() }
-                                    .onSuccess { id -> navController.navigate(Routes.edit(id)) }
-                            } finally {
-                                creatingDraft = false
-                            }
-                        }
-                    }
-                },
+                onAddNote = { addNote(voice = false) },
+                onAddVoiceNote = { addNote(voice = true) },
                 onOpenNote = { id -> navController.navigate(Routes.edit(id)) },
                 onOpenTrash = { navController.navigate(Routes.TRASH) },
                 onOpenBackup = { navController.navigate(Routes.BACKUP) },
             )
         }
         composable(
-            route = "${Routes.EDIT}/{${Routes.ARG_ID}}",
-            arguments = listOf(navArgument(Routes.ARG_ID) { type = NavType.LongType }),
+            route = "${Routes.EDIT}/{${Routes.ARG_ID}}?${Routes.ARG_VOICE}={${Routes.ARG_VOICE}}",
+            arguments = listOf(
+                navArgument(Routes.ARG_ID) { type = NavType.LongType },
+                navArgument(Routes.ARG_VOICE) {
+                    type = NavType.BoolType
+                    defaultValue = false
+                },
+            ),
         ) { backStackEntry ->
             val id = backStackEntry.arguments?.getLong(Routes.ARG_ID) ?: 0L
             NoteEditScreen(
                 viewModel = viewModel,
                 noteId = id,
+                startVoice = backStackEntry.arguments?.getBoolean(Routes.ARG_VOICE) ?: false,
                 onDone = {
                     if (!navController.popBackStack()) {
                         navController.navigate(Routes.LIST) {

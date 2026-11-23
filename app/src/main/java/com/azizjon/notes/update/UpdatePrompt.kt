@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.azizjon.notes.BuildConfig
 import kotlinx.coroutines.launch
 
 /**
@@ -38,7 +39,8 @@ fun UpdatePrompt() {
     var dismissed by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        info = manager.checkForUpdate()
+        // A debug build is a separate app beside the released one; the update would install the released app.
+        if (!BuildConfig.DEBUG) info = manager.checkForUpdate()
     }
 
     val update = info

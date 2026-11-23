@@ -14,6 +14,8 @@ androidxTestRunner = "1.6.2"
 richeditorCompose = "1.0.0-rc14"
 securityCrypto = "1.1.0-alpha06"
 exifInterface = "1.4.2"
+# The speech engine's AAR is fetched from its GitHub release by app/build.gradle.kts (not on Maven Central).
+sherpaOnnx = "2.0.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

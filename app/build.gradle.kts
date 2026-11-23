@@ -1,4 +1,6 @@
 import java.io.FileInputStream
+import java.net.URI
+import java.security.MessageDigest
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -45,7 +47,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Installs beside the released app, so a phone keeps its real notes while a build is tested.
+            applicationIdSuffix = ".debug"
+            ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        }
         release {
+            // The speech engine's native code is about 30 MB per CPU type; phones are arm64.
+            ndk { abiFilters += "arm64-v8a" }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -68,6 +77,50 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+    packaging {
+        jniLibs {
+            // sherpa-onnx's JNI library needs only libonnxruntime.so; its C and C++ API libraries go unused.
+            excludes += listOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
+        }
+    }
+}
+
+// The sherpa-onnx speech engine ships as an AAR on its GitHub release, not on Maven Central. It is
+// downloaded once into app/libs (gitignored) and checked against the SHA-256 the release lists.
+val sherpaOnnxVersion: String = libs.versions.sherpaOnnx.get()
+val sherpaOnnxSha256 = "4c766e2e74c9d33d595338c21fe3b305c73ba45d47e96a235675c33142a2ec50"
+val sherpaOnnxAar: File = file("libs/sherpa-onnx-$sherpaOnnxVersion.aar")
+val fetchSherpaOnnx by tasks.registering {
+    val target = sherpaOnnxAar
+    val expected = sherpaOnnxSha256
+    val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaOnnxVersion/" +
+        "sherpa-onnx-$sherpaOnnxVersion.aar"
+    outputs.file(target)
+    doLast {
+        fun sha256(f: File): String = MessageDigest.getInstance("SHA-256").let { md ->
+            f.inputStream().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    md.update(buffer, 0, n)
+                }
+            }
+            md.digest().joinToString("") { "%02x".format(it) }
+        }
+        if (target.exists() && sha256(target) == expected) return@doLast
+        target.parentFile.mkdirs()
+        val part = File(target.path + ".part")
+        URI(url).toURL().openStream().use { input -> part.outputStream().use { input.copyTo(it) } }
+        val got = sha256(part)
+        if (got != expected) {
+            part.delete()
+            throw GradleException("sherpa-onnx AAR checksum mismatch: got $got, expected $expected")
+        }
+        if (target.exists()) target.delete()
+        check(part.renameTo(target)) { "Could not move $part to $target" }
     }
 }
 
@@ -117,6 +170,7 @@ dependencies {
 
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.exifinterface)
+    implementation(files(sherpaOnnxAar).builtBy(fetchSherpaOnnx))
 
     debugImplementation(libs.androidx.ui.tooling)
 
