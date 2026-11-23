@@ -12,8 +12,10 @@ junit = "4.13.2"
 androidxTestExtJunit = "1.2.1"
 androidxTestRunner = "1.6.2"
 richeditorCompose = "1.0.0-rc14"
-securityCrypto = "1.1.0-alpha06"
 exifInterface = "1.4.2"
+# Git on the phone. 5.13 is the last JGit line that runs on API 26: 6.3 and later call Java APIs that need API 33.
+jgit = "5.13.5.202508271544-r"
+work = "2.9.1"
 # The speech engine's AAR is fetched from its GitHub release by app/build.gradle.kts (not on Maven Central).
 sherpaOnnx = "2.0.3"
 
@@ -34,8 +36,9 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
-androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifInterface" }
+jgit = { group = "org.eclipse.jgit", name = "org.eclipse.jgit", version.ref = "jgit" }
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }

@@ -19,19 +19,6 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-data class NotebookMediaPayload(
-    val notebookId: Long,
-    val source: ByteArray?,
-    val crop: ByteArray?,
-)
-
-data class PreparedNotebookMediaRestore(
-    val notebooks: List<Notebook>,
-    val stagingDirectory: File,
-    val fallbackCount: Int,
-    val missingSourceCount: Int,
-)
-
 /** Owns the private, optimized source and square crop files used by custom notebook markers. */
 class NotebookImageStore(context: Context) {
     private val appContext = context.applicationContext
@@ -86,71 +73,9 @@ class NotebookImageStore(context: Context) {
         loadBitmapCached(sourceFile(notebookId), "source-$notebookId")
     }
 
-    suspend fun readPayload(notebookId: Long): NotebookMediaPayload = withContext(Dispatchers.IO) {
-        NotebookMediaPayload(
-            notebookId = notebookId,
-            source = sourceFile(notebookId).takeIf(File::isFile)?.readBytes(),
-            crop = cropFile(notebookId).takeIf(File::isFile)?.readBytes(),
-        )
-    }
-
     suspend fun delete(notebookId: Long) = withContext(Dispatchers.IO) {
         notebookDirectory(notebookId).deleteRecursively()
         invalidate(notebookId)
-    }
-
-    suspend fun prepareRestore(
-        notebooks: List<Notebook>,
-        payloads: List<NotebookMediaPayload>,
-    ): PreparedNotebookMediaRestore = withContext(Dispatchers.IO) {
-        val staging = File(appContext.cacheDir, "notebook-marker-restore-${System.nanoTime()}")
-        staging.mkdirs()
-        val byId = payloads.associateBy { it.notebookId }
-        var fallbacks = 0
-        var missingSources = 0
-
-        val safeNotebooks = notebooks.map { notebook ->
-            if (notebook.appearance().type != NotebookMarkerType.CUSTOM_PHOTO) return@map notebook
-            val payload = byId[notebook.id]
-            val sourceBitmap = payload?.source.decodeBitmapOrNull()
-            var cropBitmap = payload?.crop.decodeBitmapOrNull()
-            if (cropBitmap == null && sourceBitmap != null) {
-                cropBitmap = renderCrop(sourceBitmap, notebook.appearance().crop, CROP_EDGE)
-            }
-            if (cropBitmap == null) {
-                fallbacks++
-                return@map notebook.withAppearance(NotebookAppearance())
-            }
-
-            val target = File(staging, notebook.id.toString()).apply { mkdirs() }
-            payload?.source?.takeIf { sourceBitmap != null }?.let { File(target, SOURCE_FILE).writeBytes(it) }
-            if (sourceBitmap == null) missingSources++
-            val cropBytes = payload?.crop
-            if (cropBytes.decodeBitmapOrNull() != null) {
-                File(target, CROP_FILE).writeBytes(cropBytes!!)
-            } else {
-                writeWebpAtomically(File(target, CROP_FILE), cropBitmap, CROP_QUALITY)
-            }
-            notebook
-        }
-
-        PreparedNotebookMediaRestore(safeNotebooks, staging, fallbacks, missingSources)
-    }
-
-    suspend fun commitRestore(prepared: PreparedNotebookMediaRestore) = withContext(Dispatchers.IO) {
-        val old = File(appContext.filesDir, "$DIRECTORY-old")
-        old.deleteRecursively()
-        if (root.exists() && !root.renameTo(old)) error("Could not stage existing notebook images")
-        if (!prepared.stagingDirectory.renameTo(root)) {
-            old.renameTo(root)
-            error("Could not install restored notebook images")
-        }
-        old.deleteRecursively()
-        cache.evictAll()
-    }
-
-    fun discardRestore(prepared: PreparedNotebookMediaRestore) {
-        prepared.stagingDirectory.deleteRecursively()
     }
 
     fun invalidate(notebookId: Long) {
@@ -262,8 +187,5 @@ class NotebookImageStore(context: Context) {
             if (file.exists() && !file.delete()) error("Could not replace notebook image")
             if (!temporary.renameTo(file)) error("Could not finish notebook image")
         }
-
-        private fun ByteArray?.decodeBitmapOrNull(): Bitmap? =
-            this?.let { bytes -> runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull() }
     }
 }

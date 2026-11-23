@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: lets an emulator sync with the plain-HTTP test server on the PC
+     (tools/sync-test-server), which it reaches at 10.0.2.2. Release builds allow HTTPS only. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

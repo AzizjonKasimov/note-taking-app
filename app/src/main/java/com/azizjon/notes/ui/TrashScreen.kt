@@ -38,7 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.azizjon.notes.data.Note
+import com.azizjon.notes.life.TrashEntry
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,8 +46,8 @@ fun TrashScreen(
     viewModel: NotesViewModel,
     onBack: () -> Unit,
 ) {
-    val notes by viewModel.deletedNotes.collectAsStateWithLifecycle()
-    var deleteTarget by remember { mutableStateOf<Note?>(null) }
+    val notes by viewModel.trashed.collectAsStateWithLifecycle()
+    var deleteTarget by remember { mutableStateOf<TrashEntry?>(null) }
     var showEmptyConfirmation by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
@@ -77,7 +77,7 @@ fun TrashScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "Trash is empty",
+                    text = "Trash is empty.\nNotes you delete on this phone wait here.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -106,7 +106,7 @@ fun TrashScreen(
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("Delete note forever?") },
-            text = { Text("This cannot be undone or restored from Trash.") },
+            text = { Text("This phone's copy goes for good. The note is still in the repo's history on GitHub.") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -129,7 +129,7 @@ fun TrashScreen(
         AlertDialog(
             onDismissRequest = { showEmptyConfirmation = false },
             title = { Text("Empty Trash?") },
-            text = { Text("All ${notes.size} trashed note(s) will be deleted forever.") },
+            text = { Text("This phone's copies of ${notes.size} deleted note(s) go for good.") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -151,7 +151,7 @@ fun TrashScreen(
 
 @Composable
 private fun TrashedNoteRow(
-    note: Note,
+    note: TrashEntry,
     onRestore: () -> Unit,
     onDeleteForever: () -> Unit,
 ) {
@@ -164,19 +164,17 @@ private fun TrashedNoteRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (note.content.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = contentPreview(note.content),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = note.path,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "Deleted ${formatTimestamp(note.deletedAt ?: note.updatedAt)}",
+                text = "Deleted ${formatTimestamp(note.deletedAt)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
             )

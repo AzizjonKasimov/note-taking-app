@@ -13,6 +13,9 @@ abstract class NotesDatabase : RoomDatabase() {
     abstract fun notebookDao(): NotebookDao
 
     companion object {
+        /** The app kept its own notes here until they moved into the life repo; now only read once. */
+        const val NAME = "notes.db"
+
         @Volatile
         private var INSTANCE: NotesDatabase? = null
 
@@ -21,7 +24,7 @@ abstract class NotesDatabase : RoomDatabase() {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     NotesDatabase::class.java,
-                    "notes.db",
+                    NAME,
                 )
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .addCallback(DefaultNotebookCallback)

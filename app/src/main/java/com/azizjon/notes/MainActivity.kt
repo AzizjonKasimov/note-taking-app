@@ -22,6 +22,17 @@ import com.azizjon.notes.ui.theme.AppThemeMode
 import com.azizjon.notes.ui.theme.NotesTheme
 
 class MainActivity : ComponentActivity() {
+    override fun onStart() {
+        super.onStart()
+        (application as NotesApplication).life.onForeground()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // The editor has saved by now (it flushes on stop); send the edits up, or as soon as online.
+        (application as NotesApplication).life.syncSoon(delaySeconds = 0)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

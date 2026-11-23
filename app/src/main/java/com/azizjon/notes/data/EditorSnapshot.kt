@@ -1,9 +1,7 @@
 package com.azizjon.notes.data
 
-/** Complete durable state for one editor revision. */
+/** Complete durable state for one editor revision: a note's path in the repo and its whole text. */
 data class EditorSnapshot(
-    val noteId: Long,
-    val title: String,
+    val path: String,
     val content: String,
-    val notebookId: Long,
 )

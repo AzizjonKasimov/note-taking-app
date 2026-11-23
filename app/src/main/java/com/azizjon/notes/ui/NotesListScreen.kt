@@ -1,5 +1,6 @@
 package com.azizjon.notes.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,14 +11,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,17 +32,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,7 +58,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.azizjon.notes.R
-import com.azizjon.notes.data.Note
+import com.azizjon.notes.life.AppNotesMove
+import com.azizjon.notes.life.NoteEntry
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
@@ -60,49 +70,58 @@ fun NotesListScreen(
     viewModel: NotesViewModel,
     onAddNote: () -> Unit,
     onAddVoiceNote: () -> Unit,
-    onOpenNote: (Long) -> Unit,
+    onOpenNote: (String) -> Unit,
     onOpenTrash: () -> Unit,
-    onOpenBackup: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val notes by viewModel.notes.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
-    val notebooks by viewModel.notebooks.collectAsStateWithLifecycle()
-    val counts by viewModel.notebookCounts.collectAsStateWithLifecycle()
-    val selectedNotebookId by viewModel.selectedNotebookId.collectAsStateWithLifecycle()
-    val deletedNotes by viewModel.deletedNotes.collectAsStateWithLifecycle()
+    val folders by viewModel.folders.collectAsStateWithLifecycle()
+    val totalCount by viewModel.totalCount.collectAsStateWithLifecycle()
+    val selectedFolder by viewModel.selectedFolder.collectAsStateWithLifecycle()
+    val trashed by viewModel.trashed.collectAsStateWithLifecycle()
+    val sync by viewModel.syncStatus.collectAsStateWithLifecycle()
+    val movedAppNotes by viewModel.movedAppNotes.collectAsStateWithLifecycle()
     var searching by rememberSaveable { mutableStateOf(false) }
-    var appearanceTargetId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var appearanceTargetPath by rememberSaveable { mutableStateOf<String?>(null) }
+    val snackbar = remember { SnackbarHostState() }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
-    // Top-bar title reflects the active notebook, or "All notes" for the unfiltered view.
-    val selectedNotebook = selectedNotebookId?.let { id -> notebooks.firstOrNull { it.id == id } }
-    val title = selectedNotebook?.name?.ifBlank { "Untitled" } ?: "All notes"
-    val notebooksById = notebooks.associateBy { it.id }
+    val selected = selectedFolder?.let { path -> folders.firstOrNull { it.path == path } }
+    val title = selected?.notebook?.name ?: "All notes"
+    val foldersByPath = folders.associateBy { it.path }
+
+    LaunchedEffect(movedAppNotes) {
+        if (movedAppNotes > 0) {
+            viewModel.consumeMovedAppNotes()
+            snackbar.showSnackbar(
+                "Moved $movedAppNotes note(s) you wrote in the app into the ${AppNotesMove.INBOX} folder.",
+            )
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = !searching,
         drawerContent = {
             NotebookDrawerSheet(
-                notebooks = notebooks,
-                counts = counts,
-                selectedNotebookId = selectedNotebookId,
-                onSelect = { id ->
-                    viewModel.selectNotebook(id)
+                folders = folders,
+                totalCount = totalCount,
+                selectedFolder = selectedFolder,
+                onSelect = { path ->
+                    viewModel.selectFolder(path)
                     scope.launch { drawerState.close() }
                 },
-                onCreate = viewModel::createNotebook,
-                onRename = viewModel::renameNotebook,
-                onDelete = viewModel::deleteNotebook,
-                onAppearance = { notebook ->
+                onCreate = viewModel::createFolder,
+                onAppearance = { folder ->
                     scope.launch {
                         drawerState.close()
-                        appearanceTargetId = notebook.id
+                        appearanceTargetPath = folder.path
                     }
                 },
-                trashCount = deletedNotes.size,
+                trashCount = trashed.size,
                 onOpenTrash = {
                     scope.launch {
                         drawerState.close()
@@ -127,12 +146,13 @@ fun NotesListScreen(
                     TopAppBar(
                         title = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (selectedNotebook != null) {
-                                    NotebookMarker(selectedNotebook, 28.dp)
-                                } else {
-                                    AllNotesMarker(28.dp)
-                                }
-                                Text(title, modifier = Modifier.padding(start = 10.dp))
+                                if (selected != null) NotebookMarker(selected.notebook, 28.dp) else AllNotesMarker(28.dp)
+                                Text(
+                                    title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(start = 10.dp),
+                                )
                             }
                         },
                         navigationIcon = {
@@ -144,13 +164,21 @@ fun NotesListScreen(
                             IconButton(onClick = { searching = true }) {
                                 Icon(Icons.Filled.Search, contentDescription = "Search")
                             }
-                            IconButton(onClick = onOpenBackup) {
+                            IconButton(enabled = !sync.running, onClick = viewModel::syncNow) {
+                                if (sync.running) {
+                                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Filled.Refresh, contentDescription = "Sync now")
+                                }
+                            }
+                            IconButton(onClick = onOpenSettings) {
                                 Icon(Icons.Filled.Settings, contentDescription = "Settings")
                             }
                         },
                     )
                 }
             },
+            snackbarHost = { SnackbarHost(snackbar) },
             floatingActionButton = {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -165,39 +193,55 @@ fun NotesListScreen(
                 }
             },
         ) { padding ->
-            if (notes.isEmpty()) {
-                EmptyState(
-                    searching = query.isNotBlank(),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(notes, key = { it.id }) { note ->
-                        NoteRow(
-                            note = note,
-                            notebook = notebooksById[note.notebookId],
-                            onClick = { onOpenNote(note.id) },
-                        )
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                sync.error?.let { SyncErrorBanner(it, onOpenSettings) }
+                val list = notes
+                when {
+                    list == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    list.isEmpty() -> EmptyState(searching = query.isNotBlank(), modifier = Modifier.fillMaxSize())
+                    else -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(list, key = { it.path }) { note ->
+                            NoteRow(
+                                note = note,
+                                folder = if (selectedFolder == null) foldersByPath[note.folder] else null,
+                                onClick = { onOpenNote(note.path) },
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
-    val appearanceTarget = appearanceTargetId?.let { id -> notebooks.firstOrNull { it.id == id } }
+    val appearanceTarget = appearanceTargetPath?.let { path -> folders.firstOrNull { it.path == path } }
     if (appearanceTarget != null) {
         NotebookAppearanceSheet(
-            notebook = appearanceTarget,
+            notebook = appearanceTarget.notebook,
             viewModel = viewModel,
-            onDismiss = { appearanceTargetId = null },
+            onDismiss = { appearanceTargetPath = null },
+        )
+    }
+}
+
+@Composable
+private fun SyncErrorBanner(message: String, onOpenSettings: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenSettings),
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
     }
 }
@@ -231,8 +275,8 @@ private fun SearchField(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NoteRow(
-    note: Note,
-    notebook: com.azizjon.notes.data.Notebook?,
+    note: NoteEntry,
+    folder: FolderItem?,
     onClick: () -> Unit,
 ) {
     ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
@@ -244,10 +288,17 @@ private fun NoteRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (note.content.isNotBlank()) {
+            if (note.conflicted) {
+                Text(
+                    text = "Changed on the phone and on the PC: both versions are inside",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (note.preview.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = contentPreview(note.content),
+                    text = note.preview,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -256,23 +307,22 @@ private fun NoteRow(
             }
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (notebook != null) {
-                    NotebookMarker(notebook, 24.dp)
-                    Text(
-                        text = notebook.name.ifBlank { "Untitled" },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(start = 8.dp, end = 8.dp),
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
+                if (folder != null) {
+                    NotebookMarker(folder.notebook, 24.dp)
+                    Spacer(Modifier.size(8.dp))
                 }
                 Text(
-                    text = formatTimestamp(note.updatedAt),
+                    text = note.path.substringBeforeLast('/', ""),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp),
+                )
+                Text(
+                    text = formatTimestamp(note.changedAt),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
@@ -285,11 +335,7 @@ private fun NoteRow(
 private fun EmptyState(searching: Boolean, modifier: Modifier = Modifier) {
     Box(modifier, contentAlignment = Alignment.Center) {
         Text(
-            text = if (searching) {
-                "No matching notes"
-            } else {
-                "No notes yet.\nTap + to create your first note."
-            },
+            text = if (searching) "No matching notes" else "No notes here yet.\nTap + to write one.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -308,12 +354,3 @@ private fun transparentFieldColors() = TextFieldDefaults.colors(
 
 internal fun formatTimestamp(epochMillis: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(epochMillis))
-
-private val MD_LINK = Regex("""\[([^\]]*)]\([^)]*\)""")
-private val MD_LINE_PREFIX = Regex("""(?m)^\s{0,3}(#{1,6}\s+|>\s+|[-*+]\s+|\d+\.\s+)""")
-private val MD_EMPHASIS = Regex("""[*_`~]""")
-
-/** Best-effort strip of markdown syntax so the 2-line list preview reads as plain text. */
-internal fun contentPreview(md: String): String =
-    MD_EMPHASIS.replace(MD_LINE_PREFIX.replace(MD_LINK.replace(md) { it.groupValues[1] }, ""), "")
-        .trim()

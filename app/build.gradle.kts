@@ -66,6 +66,16 @@ android {
         }
     }
 
+    testOptions {
+        unitTests.all { test ->
+            // A longer clash run: gradlew testDebugUnitTest -Pclash.seeds=500 -Pclash.rounds=300
+            for (name in listOf("clash.seeds", "clash.rounds")) {
+                project.findProperty(name)?.let { test.systemProperty(name, it) }
+            }
+            test.testLogging { showStandardStreams = true }
+        }
+    }
+
     lint {
         abortOnError = false
         checkReleaseBuilds = false
@@ -78,6 +88,11 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    sourceSets {
+        // The clash harness runs both on the PC (unit tests) and on a device (instrumented tests).
+        getByName("test").java.srcDir("src/sharedTest/java")
+        getByName("androidTest").java.srcDir("src/sharedTest/java")
     }
     packaging {
         jniLibs {
@@ -168,8 +183,9 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
-    implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.exifinterface)
+    implementation(libs.jgit)
+    implementation(libs.androidx.work.runtime.ktx)
     implementation(files(sherpaOnnxAar).builtBy(fetchSherpaOnnx))
 
     debugImplementation(libs.androidx.ui.tooling)

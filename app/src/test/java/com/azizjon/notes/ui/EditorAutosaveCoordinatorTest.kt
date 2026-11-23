@@ -17,7 +17,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EditorAutosaveCoordinatorTest {
-    private val baseline = EditorSnapshot(7L, "", "", 1L)
+    private val baseline = EditorSnapshot("inbox/note.md", "")
 
     @Test
     fun idleAutosave_coalescesHundredsOfChangesIntoLatestRevision() = runBlocking {
@@ -33,13 +33,13 @@ class EditorAutosaveCoordinatorTest {
         try {
             coordinator.begin(baseline)
             repeat(300) { revision ->
-                coordinator.submit(baseline.copy(title = "revision-$revision"))
+                coordinator.submit(baseline.copy(content = "revision-$revision"))
             }
 
             withTimeout(2_000L) {
                 while (writes.isEmpty()) delay(10L)
             }
-            assertEquals("revision-299", writes.last().title)
+            assertEquals("revision-299", writes.last().content)
             assertEquals(EditorSaveStatus.SAVED, coordinator.status.value)
         } finally {
             coordinator.endSession()
@@ -82,8 +82,8 @@ class EditorAutosaveCoordinatorTest {
         val coordinator = EditorAutosaveCoordinator(
             scope = scope,
             writer = { snapshot ->
-                writes += snapshot.title
-                if (snapshot.title == "older") {
+                writes += snapshot.content
+                if (snapshot.content == "older") {
                     firstWriteStarted.complete(Unit)
                     releaseFirstWrite.await()
                 }
@@ -94,10 +94,10 @@ class EditorAutosaveCoordinatorTest {
         )
         try {
             coordinator.begin(baseline)
-            coordinator.submit(baseline.copy(title = "older"))
+            coordinator.submit(baseline.copy(content = "older"))
             val flush = async(Dispatchers.Default) { coordinator.flush() }
             firstWriteStarted.await()
-            coordinator.submit(baseline.copy(title = "newest"))
+            coordinator.submit(baseline.copy(content = "newest"))
             releaseFirstWrite.complete(Unit)
 
             flush.await().getOrThrow()
@@ -126,12 +126,12 @@ class EditorAutosaveCoordinatorTest {
         )
         try {
             coordinator.begin(baseline)
-            coordinator.submit(baseline.copy(title = "recover me"))
+            coordinator.submit(baseline.copy(content = "recover me"))
             assertTrue(coordinator.flush().isFailure)
             assertEquals(EditorSaveStatus.ERROR, coordinator.status.value)
 
             coordinator.retry().getOrThrow()
-            assertEquals("recover me", writes.single().title)
+            assertEquals("recover me", writes.single().content)
             assertEquals(EditorSaveStatus.SAVED, coordinator.status.value)
         } finally {
             coordinator.endSession()

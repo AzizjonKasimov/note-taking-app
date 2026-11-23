@@ -3,7 +3,9 @@ package com.azizjon.notes.data
 import android.content.Context
 
 data class ActiveEditorSession(
-    val noteId: Long,
+    /** The note's path in the repo. */
+    val path: String,
+    /** True for a note made in this session, which has no file until its first save. */
     val isNew: Boolean,
 )
 
@@ -17,26 +19,25 @@ class ActiveEditorSessionStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun read(): ActiveEditorSession? {
-        val id = preferences.getLong(KEY_NOTE_ID, NO_NOTE_ID)
-        if (id <= 0L) return null
-        return ActiveEditorSession(id, preferences.getBoolean(KEY_IS_NEW, false))
+        val path = preferences.getString(KEY_PATH, null)?.takeIf { it.isNotBlank() } ?: return null
+        return ActiveEditorSession(path, preferences.getBoolean(KEY_IS_NEW, false))
     }
 
     fun write(session: ActiveEditorSession): Boolean =
         preferences.edit()
-            .putLong(KEY_NOTE_ID, session.noteId)
+            .clear()
+            .putString(KEY_PATH, session.path)
             .putBoolean(KEY_IS_NEW, session.isNew)
             .commit()
 
     fun clear(): Boolean = preferences.edit().clear().commit()
 
-    fun clearIf(noteId: Long): Boolean =
-        if (read()?.noteId == noteId) clear() else true
+    fun clearIf(path: String): Boolean =
+        if (read()?.path == path) clear() else true
 
     companion object {
         internal const val PREFS_NAME = "active_editor_session"
-        private const val KEY_NOTE_ID = "note_id"
+        private const val KEY_PATH = "path"
         private const val KEY_IS_NEW = "is_new"
-        private const val NO_NOTE_ID = -1L
     }
 }

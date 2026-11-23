@@ -1,18 +1,21 @@
 # Notes
 
-A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack Compose** (Material 3), local storage with **Room**.
+A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack Compose** (Material 3).
+Your notes are the Markdown files of your own private GitHub repo: the app keeps a git clone of it
+on the phone (**JGit**) and syncs it, so the phone and your computer share one set of notes.
 
 ## Features
 
-- List, create, edit, and move notes to Trash
-- WYSIWYG Markdown editing with bold, italic, links, numbered/bulleted lists, and nested lists
-- Phone-friendly indent/outdent controls plus automatic formatting of pasted Markdown
+- Notes are the Markdown files of your private GitHub repo; notebooks are its top-level folders
+- Sync with GitHub: commit, pull, and push, offline edits included, without ever losing an edit
+  made on the phone or on your computer (see below)
+- A Markdown editor that keeps each file exactly as written, and WYSIWYG editing (bold, italic,
+  links, nested lists, Markdown paste) for notes it can't change by accident
 - Crash-safe local autosave with resumable editing after the app is closed or killed
-- Search across titles and content
+- Search across titles and text, newest notes first
 - Visual notebook markers: automatic initials, colored folders, emoji, preset covers, or cropped gallery photos
-- Confirm before moving a note to Trash; restore it or explicitly delete it forever
+- Confirm before deleting a note; a copy waits in Trash on the phone until you restore it or delete it forever
 - Light / dark theme with Android 12+ dynamic color and an in-app theme override
-- Local storage (Room) + GitHub SQL backup/restore to a private data repo
 - In-app auto-update from GitHub Releases
 - Voice notes: speech becomes text on the phone, offline, with an open speech model (see below)
 
@@ -23,7 +26,8 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 | Language | Kotlin 2.3 |
 | UI | Jetpack Compose, Material 3 |
 | Architecture | MVVM (`NotesViewModel`), manual DI in `NotesApplication` |
-| Persistence | Room (`notes.db`), KSP codegen |
+| Notes | A git clone of your repo, through JGit 5.13 (the last line that runs on Android 8); WorkManager for background syncs |
+| Old notes | Room (`notes.db`), read once to move notes from the app's earlier local list into the repo |
 | Navigation | navigation-compose |
 | Speech to text | sherpa-onnx 2.0.3 (ONNX Runtime) with NVIDIA Parakeet TDT 0.6B v2 int8 and Silero VAD |
 | Build | Gradle (wrapper), AGP 8.13, version catalog |
@@ -34,12 +38,14 @@ A simple, offline-first note-taking app for Android. Native **Kotlin + Jetpack C
 ```
 app/src/main/java/com/azizjon/notes/
   MainActivity.kt            # Compose entry point
-  NotesApplication.kt        # owns the DB/repository
-  backup/                    # GitHub SQL backup/restore
-  data/                      # Entities, Room, repository, and private marker images
+  NotesApplication.kt        # owns the repository and voice services
+  life/                      # The notes repo: clone, files, sync, three-way merge, token store
+  data/                      # The old Room list (read once), editor session, private marker images
   ui/                        # Screens, marker picker/cropper, navigation, and theme
   voice/                     # Voice notes: recording, the speech model, speech to text
+app/src/sharedTest/          # The clash harness, run on the PC and on a device
 tools/speech-bench/          # Scores speech models on your own recordings (PC)
+tools/sync-test-server/      # A local stand-in for GitHub, for trying sync on an emulator (PC)
 ```
 
 ## Build & run
@@ -104,27 +110,57 @@ ignored).
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), Apache-2.0.
 - [Silero VAD](https://github.com/snakers4/silero-vad), MIT (`app/src/main/assets/silero_vad.onnx`).
 
+## Your notes repo and sync
+
+On first run, the app asks for a GitHub **fine-grained token** that you make yourself: repository
+access "Only select repositories" (your notes repo), permission **Contents: Read and write**. The
+app asks GitHub which repo the token opens, clones its `main` branch into private app storage, and
+from then on syncs: when the app comes to the front, a few seconds after a note is closed, when the
+app goes to the background (waiting for a connection if there is none), every 30 minutes, and with
+the sync button. The token is encrypted with an AES-256-GCM key held in the Android Keystore,
+excluded from backups, and given to git only as a password, never in the repo's URL.
+
+A sync commits the phone's edits, fetches, and, when both sides changed, merges every file in
+memory and puts one new commit on top of GitHub's, so the history stays a straight line that
+`git pull --ff-only` on a computer can always follow. Where the phone and the computer changed the
+same lines, both versions stay in the note between `<<<<<<< phone` and `>>>>>>> PC`; the note is
+flagged, and one tap keeps the phone's, the computer's, or both. A note deleted on one side and
+edited on the other is kept, edited. The app never force-pushes. If Android stops the app in the
+middle of a sync, a small journal lets the next sync finish it.
+
+This is checked by a **clash harness** (`app/src/sharedTest/.../ClashHarness.kt`) that makes random,
+clashing edits on a phone and a computer, kills syncs at every step, and checks that no line is
+lost, that both sides end with the same files, and that GitHub's history only moves forward. It
+runs as a unit test and on a device:
+
+```powershell
+.\gradlew.bat testDebugUnitTest "-Pclash.seeds=40"
+adb shell am instrument -w -e class com.azizjon.notes.life.ClashHarnessDeviceTest -e seeds 8 com.azizjon.notes.debug.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+To try sync on an emulator without GitHub, serve a bare copy of a repo with
+`tools/sync-test-server/serve.py` (git's http-backend behind a made-up token) and connect the debug
+app to `http://10.0.2.2:8765/<name>.git`; only debug builds may use plain HTTP, and only to 10.0.2.2.
+
 ## Deletion and recovery
 
-Notes cannot be deleted by swiping the list. Use the trash button inside a note and confirm the
-action; the note moves to **Notebooks -> Trash** and remains there until you restore it or choose
-**Delete forever**. GitHub SQL backups include trashed notes, so restoring a backup preserves the
-same recoverable Trash state.
+Notes cannot be deleted by swiping the list. Use the delete button inside a note and confirm; the
+file is removed from the repo at the next sync, and a copy waits in **Notebooks -> Trash** on the
+phone until you restore it or choose **Delete forever**. The deleted note also stays in the repo's
+history on GitHub.
 
 ## Autosave and editor recovery
 
-Editing is local-first: a new note receives its permanent Room database ID before the editor opens,
-then title, rich Markdown content, formatting, and notebook changes are saved after 350 ms of idle
-time and at least every two seconds during uninterrupted typing. Moving the app to the background
-also requests an immediate local flush. GitHub auto backup remains separately debounced and starts
-only after a local Room write succeeds, so it does not make a network request for every keystroke.
+Editing is local-first: each change is written to the note's file after 350 ms of idle time and at
+least every two seconds during uninterrupted typing, and moving the app to the background also
+writes at once. Each write replaces the file whole (a temporary file is renamed over it), so a crash
+leaves the old text or the new, never half. A new note gets its file on its first save, and is named
+after its title when you close it.
 
-If Android closes the app while an editor is active, the app validates that note and reopens it in
-edit mode on the next cold launch. **Back** and **Done** both wait for the latest local write and end
-that resumable session; Done returns an existing note to read view, while Back (and Done on a newly
-created note) returns to the list. A failed write keeps the editor open with Retry and an explicit
-discard-and-leave option. Untouched empty new drafts are cleaned up, but clearing an existing note
-never deletes its row.
+If Android closes the app while an editor is active, the app reopens that note in edit mode on the
+next cold launch. **Back** and **Done** both wait for the latest local write and end that resumable
+session. A failed write keeps the editor open with Retry and an explicit discard-and-leave option.
+A new note left empty is removed.
 
 ## Notebook appearance
 
@@ -154,29 +190,7 @@ Release builds are signed with `release.keystore` using credentials in `keystore
 (both gitignored). **Back these up** — the same key must sign every update, or installs fail
 with a signature mismatch.
 
-## GitHub SQL backup
-
-The app can back up the full Room snapshot to GitHub using the Contents API. In the
-app's **gear** screen, GitHub SQL backup defaults to:
-
-- owner: `AzizjonKasimov`
-- repo: `note-taking-app-data`
-- branch: `main`
-- SQL path: `notes.sql`
-
-Create a private data repo, save a fine-grained GitHub token with read/write Contents
-access to that repo, then tap **Save GitHub settings** and **Back up now**. Auto backup
-runs a few seconds after local note/notebook changes when enabled. **Restore from
-GitHub** replaces local notes with the SQL snapshot, which is useful after a fresh
-install. The GitHub token is stored in encrypted preferences and excluded from Android
-cloud/device backup.
-
-Custom notebook photos are backed up beside the configured SQL file under
-`notebook-images/<notebook-id>/source.webp` and `crop.webp`. Image files are uploaded before
-`notes.sql`, and restore falls back to the notebook's automatic initial if no usable crop is
-available. Bundled photo covers need no extra backup files.
-
 ## Status
 
-- Working: notes CRUD, rich Markdown editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, GitHub SQL backup/restore
-- Backlog: tags, pinning, reminders, share/export
+- Working: notes in your GitHub repo with sync and clash handling, Markdown and rich editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, voice notes
+- Backlog: reminders from the repo, tags, pinning, share/export

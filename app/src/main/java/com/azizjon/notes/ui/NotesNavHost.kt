@@ -1,5 +1,6 @@
 package com.azizjon.notes.ui
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -18,21 +19,24 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.azizjon.notes.update.UpdatePrompt
+import com.azizjon.notes.life.Connection
 import com.azizjon.notes.ui.theme.AppThemeMode
+import com.azizjon.notes.update.UpdatePrompt
 import kotlinx.coroutines.launch
 
 object Routes {
     const val LIST = "list"
     const val EDIT = "edit"
-    const val BACKUP = "backup"
+    const val SETTINGS = "settings"
     const val TRASH = "trash"
-    const val ARG_ID = "noteId"
+    const val ARG_PATH = "path"
+    const val ARG_NEW = "new"
     const val ARG_VOICE = "voice"
-    fun edit(id: Long, voice: Boolean = false) = if (voice) "$EDIT/$id?$ARG_VOICE=true" else "$EDIT/$id"
+    fun edit(path: String, isNew: Boolean = false, voice: Boolean = false) =
+        "$EDIT?$ARG_PATH=${Uri.encode(path)}&$ARG_NEW=$isNew&$ARG_VOICE=$voice"
 }
 
-/** App entry composable: owns the nav graph and the shared [NotesViewModel]. */
+/** App entry composable: the connect screen until the repo is on the phone, then the notes. */
 @Composable
 fun NotesApp(
     themeMode: AppThemeMode,
@@ -40,18 +44,17 @@ fun NotesApp(
 ) {
     val viewModel: NotesViewModel = viewModel(factory = NotesViewModel.Factory)
     val startupState by viewModel.startupState.collectAsStateWithLifecycle()
+    val connection by viewModel.connection.collectAsStateWithLifecycle()
 
-    when (val state = startupState) {
-        AppStartupState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    when {
+        connection !is Connection.Ready -> ConnectScreen(viewModel, connection)
+        startupState is AppStartupState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
-        AppStartupState.NoteList -> NotesNavGraph(viewModel, Routes.LIST, themeMode, onThemeModeChange)
-        is AppStartupState.ResumeEditor -> NotesNavGraph(
-            viewModel,
-            Routes.edit(state.noteId),
-            themeMode,
-            onThemeModeChange,
-        )
+        else -> {
+            val start = (startupState as? AppStartupState.ResumeEditor)?.let { Routes.edit(it.path, it.isNew) }
+            NotesNavGraph(viewModel, start ?: Routes.LIST, themeMode, onThemeModeChange)
+        }
     }
 
     // Checks for a newer release on launch and offers a one-tap in-app update.
@@ -67,17 +70,17 @@ private fun NotesNavGraph(
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
-    var creatingDraft by remember { mutableStateOf(false) }
+    var creatingNote by remember { mutableStateOf(false) }
 
     fun addNote(voice: Boolean) {
-        if (creatingDraft) return
-        creatingDraft = true
+        if (creatingNote) return
+        creatingNote = true
         scope.launch {
             try {
-                runCatching { viewModel.createDraft() }
-                    .onSuccess { id -> navController.navigate(Routes.edit(id, voice)) }
+                runCatching { viewModel.startNewNote() }
+                    .onSuccess { path -> navController.navigate(Routes.edit(path, isNew = true, voice = voice)) }
             } finally {
-                creatingDraft = false
+                creatingNote = false
             }
         }
     }
@@ -88,26 +91,35 @@ private fun NotesNavGraph(
                 viewModel = viewModel,
                 onAddNote = { addNote(voice = false) },
                 onAddVoiceNote = { addNote(voice = true) },
-                onOpenNote = { id -> navController.navigate(Routes.edit(id)) },
+                onOpenNote = { path -> navController.navigate(Routes.edit(path)) },
                 onOpenTrash = { navController.navigate(Routes.TRASH) },
-                onOpenBackup = { navController.navigate(Routes.BACKUP) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
             )
         }
         composable(
-            route = "${Routes.EDIT}/{${Routes.ARG_ID}}?${Routes.ARG_VOICE}={${Routes.ARG_VOICE}}",
+            route = "${Routes.EDIT}?${Routes.ARG_PATH}={${Routes.ARG_PATH}}" +
+                "&${Routes.ARG_NEW}={${Routes.ARG_NEW}}&${Routes.ARG_VOICE}={${Routes.ARG_VOICE}}",
             arguments = listOf(
-                navArgument(Routes.ARG_ID) { type = NavType.LongType },
+                navArgument(Routes.ARG_PATH) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(Routes.ARG_NEW) {
+                    type = NavType.BoolType
+                    defaultValue = false
+                },
                 navArgument(Routes.ARG_VOICE) {
                     type = NavType.BoolType
                     defaultValue = false
                 },
             ),
         ) { backStackEntry ->
-            val id = backStackEntry.arguments?.getLong(Routes.ARG_ID) ?: 0L
+            val args = backStackEntry.arguments
             NoteEditScreen(
                 viewModel = viewModel,
-                noteId = id,
-                startVoice = backStackEntry.arguments?.getBoolean(Routes.ARG_VOICE) ?: false,
+                path = args?.getString(Routes.ARG_PATH).orEmpty(),
+                isNew = args?.getBoolean(Routes.ARG_NEW) ?: false,
+                startVoice = args?.getBoolean(Routes.ARG_VOICE) ?: false,
                 onDone = {
                     if (!navController.popBackStack()) {
                         navController.navigate(Routes.LIST) {
@@ -118,8 +130,8 @@ private fun NotesNavGraph(
                 },
             )
         }
-        composable(Routes.BACKUP) {
-            BackupScreen(
+        composable(Routes.SETTINGS) {
+            SettingsScreen(
                 viewModel = viewModel,
                 themeMode = themeMode,
                 onThemeModeChange = onThemeModeChange,

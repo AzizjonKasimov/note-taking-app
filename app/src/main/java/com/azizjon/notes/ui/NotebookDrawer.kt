@@ -39,32 +39,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.azizjon.notes.data.DEFAULT_NOTEBOOK_ID
-import com.azizjon.notes.data.DEFAULT_NOTEBOOK_NAME
-import com.azizjon.notes.data.Notebook
 
 /**
- * Drawer contents: an "All notes" entry, every notebook with its note count (and a Rename/Delete
- * overflow, except the protected default), and a "New notebook" action. Owns the small
- * create / rename / delete dialogs.
+ * Drawer contents: an "All notes" entry, every top-level folder of the repo with its note count
+ * (and an Appearance option), a "New notebook" action that makes a folder, and Trash.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotebookDrawerSheet(
-    notebooks: List<Notebook>,
-    counts: Map<Long, Int>,
-    selectedNotebookId: Long?,
-    onSelect: (Long?) -> Unit,
+    folders: List<FolderItem>,
+    totalCount: Int,
+    selectedFolder: String?,
+    onSelect: (String?) -> Unit,
     onCreate: (String) -> Unit,
-    onRename: (Long, String) -> Unit,
-    onDelete: (Long) -> Unit,
-    onAppearance: (Notebook) -> Unit,
+    onAppearance: (FolderItem) -> Unit,
     trashCount: Int,
     onOpenTrash: () -> Unit,
 ) {
     var showCreate by rememberSaveable { mutableStateOf(false) }
-    var renameTarget by remember { mutableStateOf<Notebook?>(null) }
-    var deleteTarget by remember { mutableStateOf<Notebook?>(null) }
 
     ModalDrawerSheet {
         Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -77,27 +69,20 @@ fun NotebookDrawerSheet(
 
             DrawerRow(
                 label = "All notes",
-                count = counts.values.sum(),
-                selected = selectedNotebookId == null,
+                count = totalCount,
+                selected = selectedFolder == null,
                 leading = { AllNotesMarker(32.dp) },
                 onClick = { onSelect(null) },
             )
 
-            notebooks.forEach { nb ->
+            folders.forEach { folder ->
                 DrawerRow(
-                    label = nb.name.ifBlank { "Untitled" },
-                    count = counts[nb.id] ?: 0,
-                    selected = selectedNotebookId == nb.id,
-                    leading = { NotebookMarker(nb, 32.dp) },
-                    onClick = { onSelect(nb.id) },
-                    trailing = {
-                        NotebookOverflow(
-                            canRenameOrDelete = nb.id != DEFAULT_NOTEBOOK_ID,
-                            onAppearance = { onAppearance(nb) },
-                            onRename = { renameTarget = nb },
-                            onDelete = { deleteTarget = nb },
-                        )
-                    },
+                    label = folder.notebook.name.ifBlank { folder.path },
+                    count = folder.count,
+                    selected = selectedFolder == folder.path,
+                    leading = { NotebookMarker(folder.notebook, 32.dp) },
+                    onClick = { onSelect(folder.path) },
+                    trailing = { NotebookOverflow(onAppearance = { onAppearance(folder) }) },
                 )
             }
 
@@ -140,23 +125,6 @@ fun NotebookDrawerSheet(
             confirmLabel = "Create",
             onConfirm = { onCreate(it); showCreate = false },
             onDismiss = { showCreate = false },
-        )
-    }
-    renameTarget?.let { nb ->
-        NotebookNameDialog(
-            title = "Rename notebook",
-            initialName = nb.name,
-            confirmLabel = "Save",
-            onConfirm = { onRename(nb.id, it); renameTarget = null },
-            onDismiss = { renameTarget = null },
-        )
-    }
-    deleteTarget?.let { nb ->
-        DeleteNotebookDialog(
-            name = nb.name.ifBlank { "Untitled" },
-            noteCount = counts[nb.id] ?: 0,
-            onConfirm = { onDelete(nb.id); deleteTarget = null },
-            onDismiss = { deleteTarget = null },
         )
     }
 }
@@ -211,12 +179,7 @@ private fun DrawerRow(
 }
 
 @Composable
-private fun NotebookOverflow(
-    canRenameOrDelete: Boolean,
-    onAppearance: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-) {
+private fun NotebookOverflow(onAppearance: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -227,16 +190,6 @@ private fun NotebookOverflow(
                 expanded = false
                 onAppearance()
             })
-            if (canRenameOrDelete) {
-                DropdownMenuItem(
-                    text = { Text("Rename") },
-                    onClick = { expanded = false; onRename() },
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete") },
-                    onClick = { expanded = false; onDelete() },
-                )
-            }
         }
     }
 }
@@ -267,31 +220,6 @@ private fun NotebookNameDialog(
                 Text(confirmLabel)
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun DeleteNotebookDialog(
-    name: String,
-    noteCount: Int,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Delete notebook") },
-        text = {
-            Text(
-                if (noteCount > 0) {
-                    val noun = if (noteCount == 1) "note" else "notes"
-                    "Delete \"$name\"? Its $noteCount $noun will move to $DEFAULT_NOTEBOOK_NAME."
-                } else {
-                    "Delete \"$name\"?"
-                },
-            )
-        },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Delete") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
