@@ -98,14 +98,21 @@ internal data class Placement(val index: Int, val text: String)
 
 /**
  * At the cursor when the writer placed one, with a space on each side where the neighbouring
- * characters need it; otherwise as a new paragraph at the end. An empty note takes the text as is.
+ * characters need it; otherwise as a new paragraph at the end, after [paragraphBreak] (a blank
+ * line in Markdown text, where a single line break would join the last paragraph or list item).
+ * An empty note takes the text as is.
  */
-internal fun placeDictation(noteText: String, cursor: Int?, dictated: String): Placement {
+internal fun placeDictation(
+    noteText: String,
+    cursor: Int?,
+    dictated: String,
+    paragraphBreak: String = "\n",
+): Placement {
     val words = dictated.trim()
     if (noteText.isBlank()) return Placement(0, words)
     if (cursor == null) {
         val end = noteText.trimEnd().length
-        return Placement(end, "\n" + words)
+        return Placement(end, paragraphBreak + words)
     }
     val at = cursor.coerceIn(0, noteText.length)
     val before = noteText.getOrNull(at - 1)

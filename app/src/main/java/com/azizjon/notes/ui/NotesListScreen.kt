@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -85,6 +86,12 @@ fun NotesListScreen(
     var searching by rememberSaveable { mutableStateOf(false) }
     var appearanceTargetPath by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
+    val listState = rememberLazyListState()
+    // A note changed or added elsewhere sorts to the top; keep the top in view when it was.
+    val firstPath = notes?.firstOrNull()?.path
+    LaunchedEffect(firstPath) {
+        if (listState.firstVisibleItemIndex <= 3) listState.scrollToItem(0)
+    }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -202,6 +209,7 @@ fun NotesListScreen(
                     }
                     list.isEmpty() -> EmptyState(searching = query.isNotBlank(), modifier = Modifier.fillMaxSize())
                     else -> LazyColumn(
+                        state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),

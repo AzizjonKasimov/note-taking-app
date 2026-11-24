@@ -109,6 +109,8 @@ class DictationTest {
     @Test
     fun dictationWithoutACursorIsANewParagraphAtTheEnd() {
         assertEquals(Placement(9, "\nSecond."), placeDictation("First one\n\n", null, "Second."))
+        // In Markdown text a paragraph needs a blank line, or it joins the list item above.
+        assertEquals(Placement(6, "\n\nSecond."), placeDictation("- milk\n", null, "Second.", paragraphBreak = "\n\n"))
     }
 
     @Test

@@ -454,6 +454,7 @@ fun NoteEditScreen(
                             noteText = body.text,
                             cursor = if (cursorPlaced) selection.start else null,
                             dictated = text,
+                            paragraphBreak = "\n\n",
                         )
                         TextFieldValue(
                             body.text.substring(0, place.index) + place.text + body.text.substring(place.index),
