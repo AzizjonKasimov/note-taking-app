@@ -28,6 +28,8 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import javax.net.ssl.SSLException
 
 /** A Markdown note of the repo, as the list shows it. */
@@ -70,7 +72,10 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
     private val files = NoteFiles(workDir)
     private val trash = LocalTrash(File(context.filesDir, "life-trash"))
     private val changeTimes = ChangeTimes(File(context.noBackupFilesDir, "life-times.txt"))
-    private val mutex = Mutex()
+    /** Held for local work on the clone (git's working tree, index, and branch, and note files). */
+    private val treeLock = ReentrantLock(true)
+    /** One sync, connect, or disconnect at a time. A sync takes [treeLock] for its local steps only. */
+    private val syncMutex = Mutex()
     @Volatile private var recovered = false
     @Volatile private var dirtySinceSync = false
     @Volatile private var times: Map<String, Long> = emptyMap()
@@ -155,10 +160,12 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
                     settings.authorEmail = account.noReplyEmail
                 }
                 tokens.save(clean)
-                mutex.withLock {
-                    _connection.value = Connection.Cloning("Downloading", null)
-                    LifeSync.clone(target, workDir, credentials(clean), CloneProgress())
-                    recovered = true
+                syncMutex.withLock {
+                    treeLock.withLock {
+                        _connection.value = Connection.Cloning("Downloading", null)
+                        LifeSync.clone(target, workDir, credentials(clean), CloneProgress())
+                        recovered = true
+                    }
                 }
                 settings.remoteUrl = target
                 settings.repoName = GitHubAccess.repoName(target)
@@ -194,9 +201,11 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
 
     /** Forgets the token and deletes the phone's copy of the repo. */
     suspend fun disconnect() {
-        locked {
-            workDir.deleteRecursively()
-            recovered = false
+        syncMutex.withLock {
+            locked {
+                workDir.deleteRecursively()
+                recovered = false
+            }
         }
         tokens.clear()
         settings.clear()
@@ -341,9 +350,12 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
         syncsRunning.incrementAndGet()
         _sync.update { it.copy(running = true) }
         try {
-            val outcome = locked {
-                dirtySinceSync = false
-                LifeSync(workDir, credentials(token), ::identity).sync()
+            val outcome = syncMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    dirtySinceSync = false
+                    LifeSync(workDir, credentials(token), ::identity, treeLock = treeLock).sync()
+                        .also { recovered = true }
+                }
             }
             val now = System.currentTimeMillis()
             settings.lastSyncAt = now
@@ -375,7 +387,7 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
     suspend fun refreshIndex() {
         if (!isCloned()) return
         val list = withContext(Dispatchers.IO) {
-            times = mutex.withLock {
+            times = treeLock.withLock {
                 runCatching { Git.open(workDir).use { changeTimes.update(it.repository) } }.getOrDefault(times)
             }
             files.listMarkdown().mapNotNull { entryFor(it) }
@@ -423,11 +435,11 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
 
     // ---- Helpers ----
 
-    /** Runs [block] alone, after finishing any sync a kill left halfway. */
+    /** Runs [block] alone on the clone, after finishing any sync a kill left halfway. */
     private suspend fun <T> locked(block: () -> T): T = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        treeLock.withLock {
             if (!recovered && isCloned()) {
-                LifeSync(workDir, credentials = null, identity = ::identity).recover()
+                LifeSync(workDir, credentials = null, identity = ::identity, treeLock = treeLock).recover()
                 recovered = true
             }
             block()

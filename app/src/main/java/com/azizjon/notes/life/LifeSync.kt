@@ -29,6 +29,9 @@ import org.eclipse.jgit.treewalk.TreeWalk
 import java.io.File
 import java.io.IOException
 import java.util.TreeMap
+import java.util.concurrent.locks.Lock
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /** The points of a sync where the clash harness can step in. */
 enum class SyncStep { COMMITTED, FETCHED, MERGED, BEFORE_CHECKOUT, CHECKED_OUT, MOVED, BEFORE_PUSH, PUSHED }
@@ -82,28 +85,41 @@ class LifeSync(
     private val identity: () -> PersonIdent,
     private val hooks: SyncHooks = SyncHooks { _, _ -> },
     private val timeoutSeconds: Int = 60,
+    /**
+     * Held while the sync touches the working tree, the index, or the branch, and released for
+     * the network, so the app can open and save notes while a slow fetch or push runs.
+     */
+    private val treeLock: Lock = ReentrantLock(),
 ) {
 
+    /** One sync. Only one may run at a time per working tree (the caller sees to that). */
     fun sync(): SyncOutcome = Git.open(workTree).use { git -> syncWith(git) }
 
     /** Finishes a move that a killed sync left halfway and clears stale lock files. */
     fun recover() {
-        Git.open(workTree).use { recover(it) }
+        Git.open(workTree).use { git -> treeLock.withLock { recover(git) } }
     }
 
     /** Commits the phone's edits without the network, so they are safe in git while offline. */
     fun commitLocal(): List<String> = Git.open(workTree).use { git ->
-        recover(git)
-        commitLocal(git)
+        treeLock.withLock {
+            recover(git)
+            commitLocal(git)
+        }
     }
+
+    private enum class Next { DONE, PUSH }
 
     private fun syncWith(git: Git): SyncOutcome {
         val repo = git.repository
-        recover(git)
-        if (repo.repositoryState != RepositoryState.SAFE) {
-            throw SyncException("The phone's copy of the repo is in the middle of a ${repo.repositoryState}.")
+        val phoneChanges = sortedSetOf<String>()
+        treeLock.withLock {
+            recover(git)
+            if (repo.repositoryState != RepositoryState.SAFE) {
+                throw SyncException("The phone's copy of the repo is in the middle of a ${repo.repositoryState}.")
+            }
+            phoneChanges += commitLocal(git)
         }
-        val phoneChanges = commitLocal(git)
         hooks.at(SyncStep.COMMITTED, null)
 
         val conflicts = LinkedHashSet<String>()
@@ -111,43 +127,52 @@ class LifeSync(
         val changed = LinkedHashSet<String>()
         var pulled = false
         fun outcome(pushed: Boolean) =
-            SyncOutcome(phoneChanges, pulled, pushed, conflicts.toList(), keptBoth.toList(), changed)
+            SyncOutcome(phoneChanges.toList(), pulled, pushed, conflicts.toList(), keptBoth.toList(), changed)
 
         repeat(MAX_ATTEMPTS) {
             fetch(git)
             hooks.at(SyncStep.FETCHED, null)
-            RevWalk(repo).use { walk ->
-                val head = walk.parseCommit(repo.resolve(LOCAL_REF) ?: throw SyncException("No $BRANCH branch on the phone."))
-                val remote = walk.parseCommit(
-                    repo.resolve(REMOTE_REF) ?: throw SyncException("GitHub has no $BRANCH branch."),
-                )
-                when {
-                    head == remote -> return outcome(pushed = false)
-                    walk.isMergedInto(remote, head) -> Unit // only the phone moved on: push below
-                    walk.isMergedInto(head, remote) -> {
-                        changed += move(git, head, remote, "sync: take GitHub's changes")
-                        pulled = true
-                        return outcome(pushed = false)
-                    }
-                    else -> {
-                        val base = mergeBase(walk, head, remote)
-                        val merged = mergeTrees(repo, base, head, remote)
-                        conflicts += merged.conflicts
-                        keptBoth += merged.keptBoth
-                        pulled = true
-                        if (merged.tree == remote.tree.id) {
-                            // Every change the phone had is on GitHub already.
+            val next = treeLock.withLock {
+                // Notes saved while the fetch ran go into this sync too.
+                phoneChanges += commitLocal(git)
+                RevWalk(repo).use { walk ->
+                    val head = walk.parseCommit(
+                        repo.resolve(LOCAL_REF) ?: throw SyncException("No $BRANCH branch on the phone."),
+                    )
+                    val remote = walk.parseCommit(
+                        repo.resolve(REMOTE_REF) ?: throw SyncException("GitHub has no $BRANCH branch."),
+                    )
+                    when {
+                        head == remote -> Next.DONE
+                        walk.isMergedInto(remote, head) -> Next.PUSH // only the phone moved on
+                        walk.isMergedInto(head, remote) -> {
                             changed += move(git, head, remote, "sync: take GitHub's changes")
-                            return outcome(pushed = false)
+                            pulled = true
+                            Next.DONE
                         }
-                        val commit = walk.parseCommit(
-                            writeCommit(repo, merged.tree, remote, mergedMessage(repo, remote, merged)),
-                        )
-                        hooks.at(SyncStep.MERGED, BranchMove(head, commit))
-                        changed += move(git, head, commit, "sync: put the phone's changes on GitHub's")
+                        else -> {
+                            val base = mergeBase(walk, head, remote)
+                            val merged = mergeTrees(repo, base, head, remote)
+                            conflicts += merged.conflicts
+                            keptBoth += merged.keptBoth
+                            pulled = true
+                            if (merged.tree == remote.tree.id) {
+                                // Every change the phone had is on GitHub already.
+                                changed += move(git, head, remote, "sync: take GitHub's changes")
+                                Next.DONE
+                            } else {
+                                val commit = walk.parseCommit(
+                                    writeCommit(repo, merged.tree, remote, mergedMessage(repo, remote, merged)),
+                                )
+                                hooks.at(SyncStep.MERGED, BranchMove(head, commit))
+                                changed += move(git, head, commit, "sync: put the phone's changes on GitHub's")
+                                Next.PUSH
+                            }
+                        }
                     }
                 }
             }
+            if (next == Next.DONE) return outcome(pushed = false)
             hooks.at(SyncStep.BEFORE_PUSH, null)
             if (push(git)) {
                 hooks.at(SyncStep.PUSHED, null)

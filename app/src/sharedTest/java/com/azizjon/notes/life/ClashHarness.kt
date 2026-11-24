@@ -35,6 +35,7 @@ class ClashHarness(private val root: File, private val seed: Long) {
         var crashes = 0
         var partialCheckouts = 0
         var pushesDuringSync = 0
+        var editsDuringSync = 0
         var staleLocks = 0
         var conflictFiles = 0
         var keptBoth = 0
@@ -43,6 +44,7 @@ class ClashHarness(private val root: File, private val seed: Long) {
         override fun toString() =
             "syncs=$syncs phoneEdits=$phoneEdits pcEdits=$pcEdits editorSaves=$editorSaves " +
                 "crashes=$crashes partialCheckouts=$partialCheckouts pushesDuringSync=$pushesDuringSync " +
+                "editsDuringSync=$editsDuringSync " +
                 "staleLocks=$staleLocks conflictFiles=$conflictFiles keptBoth=$keptBoth " +
                 "tokensAlive=$tokensAlive tokensRemoved=$tokensRemoved"
     }
@@ -114,6 +116,20 @@ class ClashHarness(private val root: File, private val seed: Long) {
 
     // ---- The phone ----
 
+    /** Files that differ from the phone's last commit. */
+    private fun dirtyPaths(git: Git): Set<String> {
+        val status = git.status().call()
+        return status.modified + status.untracked + status.missing + status.added + status.changed + status.removed
+    }
+
+    /** A phone edit, returning the paths it touched (for edits made while a sync runs). */
+    private fun phoneEditPaths(): Set<String> {
+        val before = phoneFiles.listMarkdown().associateWith { phoneFiles.read(it) }
+        phoneEdit()
+        val after = phoneFiles.listMarkdown().associateWith { phoneFiles.read(it) }
+        return (before.keys + after.keys).filter { before[it] != after[it] }.toSet() + "pic.bin"
+    }
+
     private fun phoneEdit() {
         report.phoneEdits++
         if (rnd.nextInt(20) == 0) {
@@ -163,8 +179,19 @@ class ClashHarness(private val root: File, private val seed: Long) {
         }
         val killAt = if (allowTrouble && rnd.nextInt(4) == 0) SyncStep.entries[rnd.nextInt(SyncStep.entries.size)] else null
         val pushFromPc = allowTrouble && rnd.nextInt(4) == 0
+        // The app saves notes while a sync waits on the network (it holds no lock then).
+        val editDuringNetwork = if (allowTrouble && rnd.nextInt(4) == 0) {
+            if (rnd.nextBoolean()) SyncStep.FETCHED else SyncStep.BEFORE_PUSH
+        } else {
+            null
+        }
         var pushed = false
+        val editedDuringSync = HashSet<String>()
         val hooks = SyncHooks { step, move ->
+            if (step == editDuringNetwork) {
+                report.editsDuringSync++
+                editedDuringSync += phoneEditPaths()
+            }
             if (step == SyncStep.BEFORE_PUSH && pushFromPc && !pushed) {
                 pushed = true
                 report.pushesDuringSync++
@@ -184,7 +211,8 @@ class ClashHarness(private val root: File, private val seed: Long) {
             report.conflictFiles += outcome.conflicts.size
             report.keptBoth += outcome.keptBoth.size
             Git.open(phoneDir).use { git ->
-                check(git.status().call().isClean) { "round $round: phone not clean after a sync" }
+                val left = dirtyPaths(git)
+                check((left - editedDuringSync).isEmpty()) { "round $round: phone not clean after a sync: $left" }
             }
             val locks = File(phoneDir, ".git").walkTopDown().filter { it.name.endsWith(".lock") }.toList()
             check(locks.isEmpty()) { "round $round: lock files left after a sync: $locks" }
@@ -193,10 +221,9 @@ class ClashHarness(private val root: File, private val seed: Long) {
             // The app starts again: the first thing it does, before any write, is recover.
             LifeSync(phoneDir, credentials = null, identity = { phoneIdent }).recover()
             Git.open(phoneDir).use { git ->
-                val status = git.status().call()
-                check(status.isClean) {
-                    "round $round: phone not clean after recovering from a kill at $killAt: " +
-                        "${status.modified} ${status.untracked} ${status.missing}"
+                val left = dirtyPaths(git)
+                check((left - editedDuringSync).isEmpty()) {
+                    "round $round: phone not clean after recovering from a kill at $killAt: $left"
                 }
             }
         }

@@ -41,6 +41,7 @@ private fun ClashHarness.Report.add(other: ClashHarness.Report) {
     crashes += other.crashes
     partialCheckouts += other.partialCheckouts
     pushesDuringSync += other.pushesDuringSync
+    editsDuringSync += other.editsDuringSync
     staleLocks += other.staleLocks
     conflictFiles += other.conflictFiles
     keptBoth += other.keptBoth
