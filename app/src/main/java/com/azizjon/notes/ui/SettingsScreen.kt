@@ -92,6 +92,8 @@ fun SettingsScreen(
                 }
             }
 
+            ReminderSettingsCard()
+
             VoiceSettingsCard()
 
             ElevatedCard(Modifier.fillMaxWidth()) {

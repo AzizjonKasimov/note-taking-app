@@ -74,6 +74,7 @@ fun NotesListScreen(
     onOpenNote: (String) -> Unit,
     onOpenTrash: () -> Unit,
     onOpenSettings: () -> Unit,
+    bottomBar: @Composable () -> Unit = {},
 ) {
     val notes by viewModel.notes.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
@@ -186,6 +187,7 @@ fun NotesListScreen(
                 }
             },
             snackbarHost = { SnackbarHost(snackbar) },
+            bottomBar = bottomBar,
             floatingActionButton = {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -238,7 +240,7 @@ fun NotesListScreen(
 }
 
 @Composable
-private fun SyncErrorBanner(message: String, onOpenSettings: () -> Unit) {
+internal fun SyncErrorBanner(message: String, onOpenSettings: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         modifier = Modifier

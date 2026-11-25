@@ -31,6 +31,7 @@ class ClashHarness(private val root: File, private val seed: Long) {
         var phoneEdits = 0
         var pcEdits = 0
         var editorSaves = 0
+        var commitEdits = 0
         var syncs = 0
         var crashes = 0
         var partialCheckouts = 0
@@ -42,7 +43,7 @@ class ClashHarness(private val root: File, private val seed: Long) {
         var tokensAlive = 0
         var tokensRemoved = 0
         override fun toString() =
-            "syncs=$syncs phoneEdits=$phoneEdits pcEdits=$pcEdits editorSaves=$editorSaves " +
+            "syncs=$syncs phoneEdits=$phoneEdits pcEdits=$pcEdits editorSaves=$editorSaves commitEdits=$commitEdits " +
                 "crashes=$crashes partialCheckouts=$partialCheckouts pushesDuringSync=$pushesDuringSync " +
                 "editsDuringSync=$editsDuringSync " +
                 "staleLocks=$staleLocks conflictFiles=$conflictFiles keptBoth=$keptBoth " +
@@ -77,6 +78,7 @@ class ClashHarness(private val root: File, private val seed: Long) {
                 in 0 until 30 -> phoneEdit()
                 in 30 until 55 -> pcEdit()
                 in 55 until 65 -> editorStep()
+                in 65 until 72 -> phoneCommitEdit()
                 else -> phoneSync(round)
             }
         }
@@ -94,7 +96,16 @@ class ClashHarness(private val root: File, private val seed: Long) {
     private fun setUp() {
         root.deleteRecursively()
         root.mkdirs()
-        Git.init().setBare(true).setDirectory(remoteDir).setInitialBranch("main").call().close()
+        Git.init().setBare(true).setDirectory(remoteDir).setInitialBranch("main").call().use { git ->
+            // JGit garbage-collects a repo that received a push on a background thread once it has
+            // many packs (receive.autogc), rewriting packed-refs while this harness reads it; on
+            // Windows that read then fails at random (seed 26 of a 40-seed run, 2026-11-25). GitHub
+            // is no JGit repo, and the phone's clone has gc off, so the stand-ins have it off too.
+            git.repository.config.apply {
+                setBoolean("receive", null, "autogc", false)
+                setInt("gc", null, "auto", 0)
+            }.save()
+        }
         Git.init().setDirectory(pcDir).setInitialBranch("main").call().use { git ->
             for (name in listOf("a", "b", "c", "d")) {
                 writePc("notes/$name.md", List(6) { newToken("I") }.joinToString("\n", postfix = "\n"))
@@ -108,6 +119,7 @@ class ClashHarness(private val root: File, private val seed: Long) {
             git.repository.config.apply {
                 setString("branch", "main", "remote", "origin")
                 setString("branch", "main", "merge", "refs/heads/main")
+                setInt("gc", null, "auto", 0)
             }.save()
         }
         LifeSync.clone(remoteUrl, phoneDir, credentials = null)
@@ -163,6 +175,30 @@ class ClashHarness(private val root: File, private val seed: Long) {
         }
     }
 
+    /**
+     * One note changed and committed on its own, with its own message, as a reminder ticked on the
+     * Today screen is (`LifeRepository.commitEdit`): the phone's branch moves between syncs, or
+     * while one waits on the network.
+     */
+    private fun phoneCommitEdit() {
+        val paths = phoneFiles.listMarkdown()
+        if (paths.isEmpty()) return
+        val path = paths[rnd.nextInt(paths.size)]
+        val text = phoneFiles.read(path) ?: return
+        val edited = editText(text, "P")
+        if (edited == text) return
+        report.commitEdits++
+        phoneFiles.write(path, edited)
+        Git.open(phoneDir).use { git ->
+            git.add().addFilepattern(path).call()
+            // Back to its committed text: nothing to commit (LifeRepository.commitEdit skips it too).
+            val status = git.status().addPath(path).call()
+            if ((status.added + status.changed + status.removed).isEmpty()) return
+            git.commit().setAuthor(phoneIdent).setCommitter(phoneIdent).setNoVerify(true)
+                .setOnly(path).setMessage("Reminders: done: $path").call()
+        }
+    }
+
     private fun saveEditor(open: Triple<String, String, String>) {
         val (path, base, current) = open
         val edited = editText(current, "P")
@@ -185,6 +221,12 @@ class ClashHarness(private val root: File, private val seed: Long) {
         } else {
             null
         }
+        // ...and commits a reminder change then, as a tick on the Today screen does.
+        val commitDuringNetwork = if (allowTrouble && rnd.nextInt(6) == 0) {
+            if (rnd.nextBoolean()) SyncStep.FETCHED else SyncStep.BEFORE_PUSH
+        } else {
+            null
+        }
         var pushed = false
         val editedDuringSync = HashSet<String>()
         val hooks = SyncHooks { step, move ->
@@ -192,6 +234,7 @@ class ClashHarness(private val root: File, private val seed: Long) {
                 report.editsDuringSync++
                 editedDuringSync += phoneEditPaths()
             }
+            if (step == commitDuringNetwork) phoneCommitEdit()
             if (step == SyncStep.BEFORE_PUSH && pushFromPc && !pushed) {
                 pushed = true
                 report.pushesDuringSync++

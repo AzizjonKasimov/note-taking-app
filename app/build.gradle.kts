@@ -69,7 +69,8 @@ android {
     testOptions {
         unitTests.all { test ->
             // A longer clash run: gradlew testDebugUnitTest -Pclash.seeds=500 -Pclash.rounds=300
-            for (name in listOf("clash.seeds", "clash.rounds")) {
+            // The reminder port against plan.py on a real list: -Preminders.parity=<parity.py's folder>
+            for (name in listOf("clash.seeds", "clash.rounds", "clash.from", "reminders.parity")) {
                 project.findProperty(name)?.let { test.systemProperty(name, it) }
             }
             test.testLogging { showStandardStreams = true }

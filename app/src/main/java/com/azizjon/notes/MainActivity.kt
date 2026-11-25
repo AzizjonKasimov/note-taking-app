@@ -1,6 +1,7 @@
 package com.azizjon.notes
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.SystemBarStyle
@@ -17,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.azizjon.notes.reminders.ReminderNotifications
 import com.azizjon.notes.ui.NotesApp
 import com.azizjon.notes.ui.theme.AppThemeMode
 import com.azizjon.notes.ui.theme.NotesTheme
@@ -24,7 +26,16 @@ import com.azizjon.notes.ui.theme.NotesTheme
 class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
-        (application as NotesApplication).life.onForeground()
+        val app = application as NotesApplication
+        app.life.onForeground()
+        app.reminders.onAppOpened()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // A reminder tapped while the app was open: show Today. (Opened from scratch, the app starts there.)
+        if (intent.action == ReminderNotifications.ACTION_OPEN_TODAY) (application as NotesApplication).reminders.requestOpenToday()
     }
 
     override fun onStop() {

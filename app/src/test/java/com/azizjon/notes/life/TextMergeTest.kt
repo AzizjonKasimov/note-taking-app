@@ -49,6 +49,18 @@ class TextMergeTest {
     }
 
     @Test
+    fun theSameLinesAddedOnBothSidesAmongOtherChangesAreNotAClash() {
+        // The phone's morning upkeep and an agent on the PC can both add an event's checklist steps.
+        val base = "# List\n\n### A\n- [ ] one\n\n### B\nchecklist: b\n\n### C\n- [ ] three\n"
+        val steps = "### B\nchecklist: b\nsteps: added 2026-11-25\n- [ ] 2026-11-27 two\n- [ ] 2026-11-28 two more\n"
+        val phone = base.replace("- [ ] one", "- [x] one").replace("### B\nchecklist: b\n", steps)
+        val pc = base.replace("- [ ] three", "- [-] three").replace("### B\nchecklist: b\n", steps)
+        val result = TextMerge.merge(base, phone, pc)
+        assertFalse(result.text, result.conflicted)
+        assertEquals(base.replace("- [ ] one", "- [x] one").replace("- [ ] three", "- [-] three").replace("### B\nchecklist: b\n", steps), result.text)
+    }
+
+    @Test
     fun aMissingLastNewlineSurvives() {
         val result = TextMerge.merge("a\nx\nb", "a phone\nx\nb", "a\nx\nb pc")
         assertFalse(result.conflicted)

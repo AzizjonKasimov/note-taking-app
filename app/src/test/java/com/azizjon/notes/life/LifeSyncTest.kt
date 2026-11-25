@@ -113,6 +113,33 @@ class LifeSyncTest {
     }
 
     @Test
+    fun thePhonesOwnCommitMessagesSurviveAMerge() {
+        fun phoneCommit(text: String, message: String) {
+            files.write("notes/a.md", text)
+            Git.open(phone).use { git ->
+                git.add().addFilepattern("notes/a.md").call()
+                git.commit().setAuthor(ident).setCommitter(ident).setOnly("notes/a.md").setMessage(message).call()
+            }
+        }
+        fun githubMessage() = Git.open(remote).use { it.log().setMaxCount(1).call().single().fullMessage }
+
+        phoneCommit("one (phone)\ntwo\nthree\nfour\n", "Reminders: done: one")
+        pcCommit("notes/b.md", "b (pc)\n")
+        sync()
+        assertEquals("Reminders: done: one", githubMessage())
+
+        phoneCommit("one (phone)\ntwo (phone)\nthree\nfour\n", "Reminders: done: two")
+        phoneCommit("one (phone)\ntwo (phone)\nthree (phone)\nfour\n", "Reminders: skipped: three\n\nWith a body.")
+        pcCommit("notes/b.md", "b (pc) again\n")
+        sync()
+        assertEquals(
+            "Edit notes/a.md on the phone\n\n- Reminders: done: two\n- Reminders: skipped: three",
+            githubMessage(),
+        )
+        assertEquals("one (phone)\ntwo (phone)\nthree (phone)\nfour\n", pcPull())
+    }
+
+    @Test
     fun theSameLineChangedOnBothSidesKeepsBoth() {
         pcCommit("notes/a.md", "one\nTWO (pc)\nthree\nfour\n")
         files.write("notes/a.md", "one\nTWO (phone)\nthree\nfour\n")

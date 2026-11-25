@@ -18,6 +18,9 @@ on the phone (**JGit**) and syncs it, so the phone and your computer share one s
 - Light / dark theme with Android 12+ dynamic color and an in-app theme override
 - In-app auto-update from GitHub Releases
 - Voice notes: speech becomes text on the phone, offline, with an open speech model (see below)
+- Today and reminders: the app opens on what is due from the repo's reminder list
+  (`reminders/upcoming.md`), and reminds you at 8:00 and at 20:00 the evening before an event
+  (see below)
 
 ## Tech stack
 
@@ -40,6 +43,7 @@ app/src/main/java/com/azizjon/notes/
   MainActivity.kt            # Compose entry point
   NotesApplication.kt        # owns the repository and voice services
   life/                      # The notes repo: clone, files, sync, three-way merge, token store
+  reminders/                 # The reminder list: its rules, changes from Today, alarms, notifications
   data/                      # The old Room list (read once), editor session, private marker images
   ui/                        # Screens, marker picker/cropper, navigation, and theme
   voice/                     # Voice notes: recording, the speech model, speech to text
@@ -142,6 +146,29 @@ To try sync on an emulator without GitHub, serve a bare copy of a repo with
 `tools/sync-test-server/serve.py` (git's http-backend behind a made-up token) and connect the debug
 app to `http://10.0.2.2:8765/<name>.git`; only debug builds may use plain HTTP, and only to 10.0.2.2.
 
+## Today and reminders
+
+If the repo has a reminder list, `reminders/upcoming.md` (dated events with their tasks, follow-ups,
+and questions, written as `- [ ] YYYY-MM-DD text`), the app opens on **Today**: the day's events
+and tasks, tasks up to a week late, open questions, and the next 7 days' events. Tap an event to see
+everything still open for it. Tick a task to mark it done (with Undo), or use its menu to skip it or
+move it to another day; tap a question to answer it, typed or spoken. Each change edits that one
+line and is a commit of its own, synced like any edit; while the list holds both versions of a
+clash, Today changes nothing until you settle it.
+
+At 8:00 a notification lists what is due, and at 20:00 the evening before an event another lists
+what to prepare; tapping either opens Today. They come from exact alarms, set again after a restart
+or a change of the clock, and a reminder missed while the phone was off comes when it starts, until
+noon (morning) or 23:00 (evening). Once a day, after taking in GitHub's changes, the app also keeps
+the list up: it adds the steps of an event's checklist (`reminders/checklists/<name>.md`), adds the
+coming events of a checklist that repeats (`repeat: weekly Thu 10:30`, `monthly 1st,3rd Sat`, or
+`yearly 06-18`), and moves events two weeks old to `reminders/past.md`. An answer to a question goes
+to `reminders/inbox.md`.
+
+These rules are a port of a small Python tool that the same list was written for, kept in step with
+it: `ReminderPlanTest` holds its tests, and `ReminderParityTest` compares the two on a real list, day
+after day, when given that tool's output (`-Preminders.parity=<folder>`).
+
 ## Deletion and recovery
 
 Notes cannot be deleted by swiping the list. Use the delete button inside a note and confirm; the
@@ -192,5 +219,5 @@ with a signature mismatch.
 
 ## Status
 
-- Working: notes in your GitHub repo with sync and clash handling, Markdown and rich editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, voice notes
-- Backlog: reminders from the repo, tags, pinning, share/export
+- Working: notes in your GitHub repo with sync and clash handling, Markdown and rich editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, voice notes, Today and reminders from the repo's list
+- Backlog: a capture box where an AI agent files what you type or say, tags, pinning, share/export

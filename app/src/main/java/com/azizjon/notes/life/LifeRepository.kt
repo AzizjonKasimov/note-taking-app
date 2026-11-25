@@ -57,6 +57,9 @@ data class SyncStatus(
     val error: String? = null,
 )
 
+/** New text for some files of the repo, and the message of the commit that saves them. */
+class FileEdit(val message: String, val files: Map<String, String>)
+
 /** What a background sync should tell WorkManager. */
 enum class SyncResult { DONE, RETRY, STOP }
 
@@ -328,6 +331,48 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
         }
         noteChanged("$slug/README.md")
         return slug
+    }
+
+    // ---- Changes with a commit of their own ----
+
+    /**
+     * Changes files and commits just them, so each change made on the Today screen, and each
+     * morning's upkeep of the reminder list, is a commit of its own on GitHub. [edit] runs alone on
+     * the clone and reads the files as they are now; it returns their new text and the commit's
+     * message, or null to change nothing. Returns the paths it committed.
+     */
+    suspend fun commitEdit(edit: (read: (String) -> String?) -> FileEdit?): Set<String> {
+        val written = locked {
+            val change = edit { files.read(it) } ?: return@locked emptySet()
+            val writes = change.files.filter { (path, text) -> files.read(path) != text }
+            if (writes.isEmpty()) return@locked emptySet()
+            writes.forEach { (path, text) -> files.write(path, text) }
+            Git.open(workDir).use { git ->
+                val add = git.add()
+                writes.keys.forEach { add.addFilepattern(it) }
+                add.call()
+                // A file can be back to its committed text (a tick undone before any sync); git
+                // refuses a commit of only such files, and there is nothing to commit for them.
+                val status = git.status().apply { writes.keys.forEach { addPath(it) } }.call()
+                val changed = status.added + status.changed + status.removed
+                if (changed.isNotEmpty()) {
+                    val who = identity()
+                    val commit = git.commit().setAuthor(who).setCommitter(who).setNoVerify(true).setMessage(change.message)
+                    changed.forEach { commit.setOnly(it) }
+                    commit.call()
+                }
+            }
+            writes.keys
+        }
+        written.forEach { noteChanged(it) }
+        if (written.isNotEmpty()) SyncWorker.syncSoon(context, delaySeconds = 5)
+        return written
+    }
+
+    /** The Markdown files directly inside [folder], by file name (empty when there is none). */
+    suspend fun readFolder(folder: String): Map<String, String> = locked {
+        files.file(folder).listFiles { f -> f.isFile && f.name.endsWith(".md") }.orEmpty()
+            .associate { it.name to it.readText(Charsets.UTF_8) }
     }
 
     private suspend fun noteChanged(path: String) {

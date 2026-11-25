@@ -162,7 +162,7 @@ class LifeSync(
                                 Next.DONE
                             } else {
                                 val commit = walk.parseCommit(
-                                    writeCommit(repo, merged.tree, remote, mergedMessage(repo, remote, merged)),
+                                    writeCommit(repo, merged.tree, remote, mergedMessage(repo, remote, merged, phoneMessages(repo, head, base))),
                                 )
                                 hooks.at(SyncStep.MERGED, BranchMove(head, commit))
                                 changed += move(git, head, commit, "sync: put the phone's changes on GitHub's")
@@ -388,7 +388,20 @@ class LifeSync(
         }
     }
 
-    private fun mergedMessage(repo: Repository, remote: RevCommit, merged: TreeMerge): String {
+    /** The messages of the phone's own commits since [base], oldest first (at most [MAX_LISTED]). */
+    private fun phoneMessages(repo: Repository, head: RevCommit, base: RevCommit?): List<String> =
+        RevWalk(repo).use { rw ->
+            rw.markStart(rw.parseCommit(head))
+            if (base != null) rw.markUninteresting(rw.parseCommit(base))
+            rw.take(MAX_LISTED).map { it.fullMessage.trimEnd() }.reversed()
+        }
+
+    /**
+     * The message of the commit that puts the phone's changes on GitHub's: the phone's own commit
+     * message when it made one (such as a reminder ticked on the Today screen), else what changed,
+     * with the subject of each of the phone's commits.
+     */
+    private fun mergedMessage(repo: Repository, remote: RevCommit, merged: TreeMerge, phone: List<String>): String {
         val changes = ArrayList<Pair<Char, String>>()
         repo.newObjectReader().use { reader ->
             TreeWalk(repo, reader).use { tw ->
@@ -407,7 +420,8 @@ class LifeSync(
                 }
             }
         }
-        val sb = StringBuilder(describe(changes))
+        val sb = StringBuilder(phone.singleOrNull() ?: describe(changes))
+        if (phone.size > 1) sb.append("\n\n").append(phone.joinToString("\n") { "- " + it.lineSequence().first() })
         if (merged.conflicts.isNotEmpty()) {
             sb.append("\n\nThe phone and GitHub changed the same lines of ")
                 .append(merged.conflicts.joinToString(", "))
@@ -501,6 +515,7 @@ class LifeSync(
         const val REMOTE_REF = Constants.R_REMOTES + REMOTE + "/" + BRANCH
         private const val JOURNAL = "notes-app-move"
         private const val MAX_ATTEMPTS = 5
+        private const val MAX_LISTED = 50
 
         /**
          * Clones [url] into [dir]. The clone is made beside it and renamed into place at the end,
