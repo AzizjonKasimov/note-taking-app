@@ -139,6 +139,33 @@ class Reminders(private val context: Context, private val life: LifeRepository) 
         return changes
     }
 
+    /** One expand of the list: its commit's message, and the list's text before and after. */
+    class Expanded(val message: String, val before: String, val after: String)
+
+    /**
+     * Adds checklist steps to the events that have none yet, and the coming events of repeating
+     * checklists, as a commit of its own: what the bot did right after each reply that added an
+     * event, so the assistant's new events get their steps at once rather than the next morning.
+     * Null when there is nothing to add, or the list holds a clash.
+     */
+    suspend fun expandNow(today: LocalDate = LocalDate.now()): Expanded? {
+        if (!life.isCloned()) return null
+        val checklists = ReminderPlan.checklists(life.readFolder(CHECKLISTS))
+        var expanded: Expanded? = null
+        life.commitEdit { read ->
+            val text = read(UPCOMING) ?: return@commitEdit null
+            if (TextMerge.hasConflict(text)) return@commitEdit null
+            val (after, added) = ReminderPlan.expand(text, checklists, today)
+            val real = added.filterNot { it.startsWith("warning:") }
+            if (real.isEmpty() || after == text) return@commitEdit null
+            val message = ("Reminders: " + real.joinToString("; ")).take(200)
+            expanded = Expanded(message, text, after)
+            FileEdit(message, mapOf(UPCOMING to after))
+        }
+        if (expanded != null) refreshShown()
+        return expanded
+    }
+
     /** The app came to the front: the alarms are set, and today's upkeep runs if it has not. */
     fun onAppOpened() {
         if (!life.isCloned()) return

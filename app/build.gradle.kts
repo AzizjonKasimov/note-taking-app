@@ -70,8 +70,13 @@ android {
         unitTests.all { test ->
             // A longer clash run: gradlew testDebugUnitTest -Pclash.seeds=500 -Pclash.rounds=300
             // The reminder port against plan.py on a real list: -Preminders.parity=<parity.py's folder>
-            for (name in listOf("clash.seeds", "clash.rounds", "clash.from", "reminders.parity")) {
+            // The assistant against the real AI gateway, on a throwaway copy of a repo, through bwenv:
+            // bwenv .\gradlew.bat testDebugUnitTest --tests *AssistantLiveTest -Passistant.live=<repo>
+            for (name in listOf("clash.seeds", "clash.rounds", "clash.from", "reminders.parity", "assistant.live", "assistant.messages", "assistant.model", "assistant.effort")) {
                 project.findProperty(name)?.let { test.systemProperty(name, it) }
+            }
+            if (project.findProperty("assistant.live") != null) {
+                System.getenv("GATEWAY_TOKEN")?.let { test.environment("GATEWAY_TOKEN", it) }
             }
             test.testLogging { showStandardStreams = true }
         }
@@ -192,6 +197,7 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
 
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
 
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)

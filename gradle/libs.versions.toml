@@ -9,6 +9,8 @@ composeBom = "2026.06.00"
 navigationCompose = "2.8.4"
 room = "2.8.4"
 junit = "4.13.2"
+# Android has org.json built in; the PC's unit tests need a real copy of it.
+orgJson = "20250517"
 androidxTestExtJunit = "1.2.1"
 androidxTestRunner = "1.6.2"
 richeditorCompose = "1.0.0-rc14"
@@ -40,6 +42,7 @@ androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterfa
 jgit = { group = "org.eclipse.jgit", name = "org.eclipse.jgit", version.ref = "jgit" }
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 richeditor-compose = { group = "com.mohamedrejeb.richeditor", name = "richeditor-compose", version.ref = "richeditorCompose" }

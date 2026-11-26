@@ -57,8 +57,8 @@ data class SyncStatus(
     val error: String? = null,
 )
 
-/** New text for some files of the repo, and the message of the commit that saves them. */
-class FileEdit(val message: String, val files: Map<String, String>)
+/** New text for some files of the repo (null deletes one), and the message of the commit that saves them. */
+class FileEdit(val message: String, val files: Map<String, String?>)
 
 /** What a background sync should tell WorkManager. */
 enum class SyncResult { DONE, RETRY, STOP }
@@ -344,30 +344,18 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
     suspend fun commitEdit(edit: (read: (String) -> String?) -> FileEdit?): Set<String> {
         val written = locked {
             val change = edit { files.read(it) } ?: return@locked emptySet()
-            val writes = change.files.filter { (path, text) -> files.read(path) != text }
-            if (writes.isEmpty()) return@locked emptySet()
-            writes.forEach { (path, text) -> files.write(path, text) }
-            Git.open(workDir).use { git ->
-                val add = git.add()
-                writes.keys.forEach { add.addFilepattern(it) }
-                add.call()
-                // A file can be back to its committed text (a tick undone before any sync); git
-                // refuses a commit of only such files, and there is nothing to commit for them.
-                val status = git.status().apply { writes.keys.forEach { addPath(it) } }.call()
-                val changed = status.added + status.changed + status.removed
-                if (changed.isNotEmpty()) {
-                    val who = identity()
-                    val commit = git.commit().setAuthor(who).setCommitter(who).setNoVerify(true).setMessage(change.message)
-                    changed.forEach { commit.setOnly(it) }
-                    commit.call()
-                }
-            }
-            writes.keys
+            RepoCommit.apply(files, change.message, change.files, identity())
         }
         written.forEach { noteChanged(it) }
         if (written.isNotEmpty()) SyncWorker.syncSoon(context, delaySeconds = 5)
         return written
     }
+
+    /**
+     * Runs [block] alone on the clone's files, for reads that must not see a sync halfway, such as
+     * the assistant's listing and searching. [block] must not write.
+     */
+    suspend fun <T> readTree(block: (NoteFiles) -> T): T = locked { block(files) }
 
     /** The Markdown files directly inside [folder], by file name (empty when there is none). */
     suspend fun readFolder(folder: String): Map<String, String> = locked {

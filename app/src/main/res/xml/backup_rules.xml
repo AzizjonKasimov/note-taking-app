@@ -3,6 +3,8 @@
     <!-- The GitHub token, sealed with a Keystore key that a restored phone would not have. The repo's
          clone lives in noBackupFilesDir, which backups always leave out. -->
     <exclude domain="sharedpref" path="life_secrets.xml" />
+    <!-- The AI gateway key, sealed the same way. -->
+    <exclude domain="sharedpref" path="assistant_secrets.xml" />
     <!-- The speech model (about 660 MB) is downloaded again; it would also overflow Android's 25 MB backup quota. -->
     <exclude domain="external" path="models/" />
     <!-- Dictation audio is only kept until its text is saved. -->

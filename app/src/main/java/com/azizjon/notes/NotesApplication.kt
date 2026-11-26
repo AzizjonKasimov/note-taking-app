@@ -1,12 +1,23 @@
 package com.azizjon.notes
 
 import android.app.Application
+import com.azizjon.notes.assistant.Assistant
+import com.azizjon.notes.assistant.AssistantChange
+import com.azizjon.notes.assistant.AssistantChoiceStore
+import com.azizjon.notes.assistant.AssistantRepo
+import com.azizjon.notes.assistant.AssistantSession
+import com.azizjon.notes.assistant.AssistantTools
+import com.azizjon.notes.assistant.FileChange
+import com.azizjon.notes.assistant.GatewayClient
 import com.azizjon.notes.data.ActiveEditorSessionStore
 import com.azizjon.notes.data.NotebookImageStore
 import com.azizjon.notes.life.Connection
+import com.azizjon.notes.life.FileEdit
 import com.azizjon.notes.life.FolderAppearanceStore
 import com.azizjon.notes.life.LifeRepository
+import com.azizjon.notes.life.NoteFiles
 import com.azizjon.notes.life.SyncWorker
+import com.azizjon.notes.life.TokenStore
 import com.azizjon.notes.reminders.ReminderAlarms
 import com.azizjon.notes.reminders.ReminderNotifications
 import com.azizjon.notes.reminders.Reminders
@@ -27,6 +38,38 @@ class NotesApplication : Application() {
     val folderAppearance: FolderAppearanceStore by lazy { FolderAppearanceStore(this) }
     val life: LifeRepository by lazy { LifeRepository(this, appScope) }
     val reminders: Reminders by lazy { Reminders(this, life) }
+
+    /** The AI gateway's key, which the user enters in Settings. */
+    val gatewayKey: TokenStore by lazy { TokenStore(this, TokenStore.GATEWAY_PREFS_NAME, TokenStore.GATEWAY_KEY_ALIAS) }
+
+    /** The "tell me anything" box on Today: the assistant's conversation since the app started. */
+    val assistant: AssistantSession by lazy {
+        val repo = object : AssistantRepo {
+            override suspend fun <T> read(block: (NoteFiles) -> T): T = life.readTree(block)
+            override suspend fun commitEdit(edit: (read: (String) -> String?) -> FileEdit?): Set<String> = life.commitEdit(edit)
+        }
+        val runner = Assistant(
+            gateway = GatewayClient(token = { gatewayKey.read() }),
+            tools = AssistantTools(repo),
+            repo = repo,
+            afterTurn = { changes ->
+                // A new event gets its checklist's steps at once, as the bot added them after each reply.
+                if (changes.none { Reminders.UPCOMING in it.paths }) {
+                    emptyList()
+                } else {
+                    listOfNotNull(
+                        reminders.expandNow()?.let { added ->
+                            AssistantChange(
+                                summary = added.message.removePrefix("Reminders: ").replaceFirstChar { it.uppercase() },
+                                files = listOf(FileChange(Reminders.UPCOMING, added.before, added.after)),
+                            )
+                        },
+                    )
+                }
+            },
+        )
+        AssistantSession(appScope, runner, repo, AssistantChoiceStore(this))
+    }
 
     override fun onCreate() {
         super.onCreate()

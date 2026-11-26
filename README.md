@@ -21,6 +21,8 @@ on the phone (**JGit**) and syncs it, so the phone and your computer share one s
 - Today and reminders: the app opens on what is due from the repo's reminder list
   (`reminders/upcoming.md`), and reminds you at 8:00 and at 20:00 the evening before an event
   (see below)
+- Tell me anything: a box on Today where you type or say anything, and an AI assistant files it in
+  your repo, each change with Undo (see below)
 
 ## Tech stack
 
@@ -41,7 +43,8 @@ on the phone (**JGit**) and syncs it, so the phone and your computer share one s
 ```
 app/src/main/java/com/azizjon/notes/
   MainActivity.kt            # Compose entry point
-  NotesApplication.kt        # owns the repository and voice services
+  NotesApplication.kt        # owns the repository, voice, and assistant services
+  assistant/                 # "Tell me anything": the gateway client, the file tools, undo
   life/                      # The notes repo: clone, files, sync, three-way merge, token store
   reminders/                 # The reminder list: its rules, changes from Today, alarms, notifications
   data/                      # The old Room list (read once), editor session, private marker images
@@ -169,6 +172,35 @@ These rules are a port of a small Python tool that the same list was written for
 it: `ReminderPlanTest` holds its tests, and `ReminderParityTest` compares the two on a real list, day
 after day, when given that tool's output (`-Preminders.parity=<folder>`).
 
+## Tell me anything
+
+At the bottom of Today is a box: type or say anything ("remind me to call the bank on Monday", "idea:
+an app that knows which bus to take when it rains"), and an AI assistant puts it where it belongs in
+your repo: a dated to-do into the reminder list, an idea with your ideas, a fact into its topic's
+file, and whatever it cannot place into the `inbox/` folder. Ask it a question and it answers from
+your files. Speaking fills the box, so you can fix a misheard word before you send.
+
+The assistant is Claude, reached through your own [AI gateway](#the-ai-gateway): Claude plans there,
+and every tool runs here on the phone, against your clone: list a folder, read a file, search, and
+change a Markdown file (replace text, add text, or create a file). Each change is a commit of its
+own, listed under the reply with **Undo**, which takes it back while keeping later edits to other
+lines. It never deletes or moves a file, never touches a file holding both versions of a clash, and
+an edit that would leave lines the reminder list cannot read is turned down so it can try again.
+
+Where things go is up to your repo, not the app: the assistant reads `ASSISTANT.md` at the repo's
+top with every message, and the reminder list's rules from `reminders/README.md`. The app's own
+instructions are general (`assistant/AssistantPrompt.kt`).
+
+### The AI gateway
+
+Settings → Assistant takes the key to a self-hosted gateway that runs Claude agent turns (`POST
+/v1/agent/turns`): an app sends its own tools, the gateway's Claude calls them one at a time, and
+the app runs each one and posts the result back. The key is entered by you, never built into the
+app, since releases are public, and kept sealed with the Android Keystore like the GitHub token.
+`AssistantLiveTest` tries the assistant against a real gateway on a throwaway copy of a repo
+(`-Passistant.live=<repo>`, with `GATEWAY_TOKEN` in its environment), printing each reply, its time,
+and its changes as diffs.
+
 ## Deletion and recovery
 
 Notes cannot be deleted by swiping the list. Use the delete button inside a note and confirm; the
@@ -219,5 +251,5 @@ with a signature mismatch.
 
 ## Status
 
-- Working: notes in your GitHub repo with sync and clash handling, Markdown and rich editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, voice notes, Today and reminders from the repo's list
-- Backlog: a capture box where an AI agent files what you type or say, tags, pinning, share/export
+- Working: notes in your GitHub repo with sync and clash handling, Markdown and rich editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, voice notes, Today and reminders from the repo's list, and the "tell me anything" assistant
+- Backlog: tags, pinning, share/export

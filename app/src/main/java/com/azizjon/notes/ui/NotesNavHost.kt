@@ -104,7 +104,8 @@ private fun NotesNavGraph(
     }
 
     // A reminder tapped while the app is open shows Today, unless a note is open in the editor.
-    val reminders = (LocalContext.current.applicationContext as NotesApplication).reminders
+    val app = LocalContext.current.applicationContext as NotesApplication
+    val reminders = app.reminders
     LaunchedEffect(Unit) {
         reminders.openToday.collect {
             if (navController.currentDestination?.route?.startsWith(Routes.EDIT) != true) showToday()
@@ -120,7 +121,14 @@ private fun NotesNavGraph(
                 onSync = viewModel::syncNow,
                 onOpenList = { navController.navigate(Routes.edit(Reminders.UPCOMING)) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                bottomBar = { MainTabs(MainTab.TODAY, ::selectTab) },
+                bottomBar = {
+                    AssistantBar(
+                        session = app.assistant,
+                        onOpenFile = { path -> navController.navigate(Routes.edit(path)) },
+                        onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                        tabs = { MainTabs(MainTab.TODAY, ::selectTab) },
+                    )
+                },
             )
         }
         composable(Routes.LIST) {
