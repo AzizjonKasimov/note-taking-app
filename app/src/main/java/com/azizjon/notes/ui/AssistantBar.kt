@@ -81,6 +81,7 @@ fun AssistantBar(
     var picking by remember { mutableStateOf(false) }
     var text by rememberSaveable { mutableStateOf("") }
     var talking by remember { mutableStateOf(false) }
+    val startTalking = rememberMicStarter { talking = true }
     var showEarlier by rememberSaveable { mutableStateOf(false) }
     var needKey by remember { mutableStateOf(false) }
     val shown = exchanges.filterNot { it.hidden }
@@ -161,7 +162,7 @@ fun AssistantBar(
                     maxLines = 5,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 )
-                IconButton(onClick = { talking = true }) {
+                IconButton(onClick = startTalking) {
                     Icon(painterResource(R.drawable.ic_mic), contentDescription = "Say it")
                 }
                 IconButton(enabled = text.isNotBlank() && !working, onClick = ::send) {

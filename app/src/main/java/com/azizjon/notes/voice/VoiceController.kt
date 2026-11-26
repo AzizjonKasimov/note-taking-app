@@ -1,7 +1,9 @@
 package com.azizjon.notes.voice
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
 import java.io.File
@@ -16,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.core.content.ContextCompat
 
 sealed interface VoiceState {
     data object Idle : VoiceState
@@ -63,6 +66,12 @@ class VoiceController internal constructor(
     fun start() {
         if (_state.value != VoiceState.Idle) return
         val model = (models.state.value as? ModelState.Ready)?.dir ?: return
+        // Android closes the app when a microphone service starts without the permission, so a mic
+        // button that forgot to ask (rememberMicStarter) gets a message instead.
+        if (ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            _state.value = VoiceState.Failed("Notes needs the microphone for this. Tap the mic again and allow it.", canRetry = false)
+            return
+        }
         unloading?.cancel()
         recordings.mkdirs()
         val file = File(recordings, "dictation-${System.currentTimeMillis()}.wav")

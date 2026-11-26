@@ -1,6 +1,7 @@
 package com.azizjon.notes.reminders
 
 import android.content.Context
+import com.azizjon.notes.BuildConfig
 import com.azizjon.notes.life.FileEdit
 import com.azizjon.notes.life.LifeRepository
 import com.azizjon.notes.life.TextMerge
@@ -26,9 +27,12 @@ enum class ChangeResult { DONE, NOT_FOUND, CLASH, NO_LIST }
 class Reminders(private val context: Context, private val life: LifeRepository) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** Whether the 08:00 and 20:00 reminders are on. */
+    /**
+     * Whether the 08:00 and 20:00 reminders are on. Notes debug stays on the user's phone beside the
+     * released app (the user's choice, 2026-11-26), so its reminders start off, or each would come twice.
+     */
     var enabled: Boolean
-        get() = prefs.getBoolean(KEY_ENABLED, true)
+        get() = prefs.getBoolean(KEY_ENABLED, !BuildConfig.DEBUG)
         set(value) {
             prefs.edit().putBoolean(KEY_ENABLED, value).apply()
             schedule()

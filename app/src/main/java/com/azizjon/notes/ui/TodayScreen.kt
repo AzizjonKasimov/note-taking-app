@@ -409,6 +409,7 @@ private fun EventSheet(up: Upcoming, ev: Event, today: LocalDate, actions: ItemA
 private fun AnswerDialog(question: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
     var answer by rememberSaveable { mutableStateOf("") }
     var talking by remember { mutableStateOf(false) }
+    val startTalking = rememberMicStarter { talking = true }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(question) },
@@ -422,7 +423,7 @@ private fun AnswerDialog(question: String, onSave: (String) -> Unit, onDismiss: 
                     minLines = 2,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { talking = true }) {
+                    IconButton(onClick = startTalking) {
                         Icon(painterResource(R.drawable.ic_mic), contentDescription = "Say the answer")
                     }
                     Text(
