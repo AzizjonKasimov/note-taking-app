@@ -70,6 +70,7 @@ fun PeopleApp(
     val inboxBusy by viewModel.inboxBusy.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val networkAppMove by viewModel.networkAppMove.collectAsStateWithLifecycle()
+    val networkAppHandover by viewModel.networkAppHandover.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var section by rememberSaveable { mutableStateOf(AppSection.CHAT) }
     var selectedPersonId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -232,6 +233,7 @@ fun PeopleApp(
                             inboxBusy = inboxBusy,
                             peopleCount = snapshot.people.size,
                             networkAppMove = networkAppMove,
+                            networkAppHandover = networkAppHandover,
                             onCheckNetworkApp = viewModel::checkNetworkAppBackup,
                             onBringFromNetworkApp = viewModel::bringPeopleFromNetworkApp,
                             onOpenAppSettings = onOpenAppSettings,

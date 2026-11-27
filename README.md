@@ -23,6 +23,9 @@ on the phone (**JGit**) and syncs it, so the phone and your computer share one s
   (see below)
 - Tell me anything: a box on Today where you type or say anything, and an AI assistant files it in
   your repo, each change with Undo (see below)
+- People (Network App until 2.5): a private memory of the people you know, with its own assistant,
+  check-in, and encrypted backup, kept apart from your notes repo (see below and
+  [PRIVACY.md](PRIVACY.md))
 
 ## Tech stack
 
@@ -33,6 +36,7 @@ on the phone (**JGit**) and syncs it, so the phone and your computer share one s
 | Architecture | MVVM (`NotesViewModel`), manual DI in `NotesApplication` |
 | Notes | A git clone of your repo, through JGit 5.13 (the last line that runs on Android 8); WorkManager for background syncs |
 | Old notes | Room (`notes.db`), read once to move notes from the app's earlier local list into the repo |
+| People | Room (`people.db`), an AES-256-GCM encrypted backup to a private GitHub repo, androidx.security-crypto |
 | Navigation | navigation-compose |
 | Speech to text | sherpa-onnx 2.0.3 (ONNX Runtime) with NVIDIA Parakeet TDT 0.6B v2 int8 and Silero VAD |
 | Build | Gradle (wrapper), AGP 8.13, version catalog |
@@ -48,11 +52,13 @@ app/src/main/java/com/azizjon/notes/
   life/                      # The notes repo: clone, files, sync, three-way merge, token store
   reminders/                 # The reminder list: its rules, changes from Today, alarms, notifications
   data/                      # The old Room list (read once), editor session, private marker images
+  people/                    # People (Network App until 2.5): records, assistant, check-in, backup, PC drafts
   ui/                        # Screens, marker picker/cropper, navigation, and theme
   voice/                     # Voice notes: recording, the speech model, speech to text
 app/src/sharedTest/          # The clash harness, run on the PC and on a device
 tools/speech-bench/          # Scores speech models on your own recordings (PC)
 tools/sync-test-server/      # A local stand-in for GitHub, for trying sync on an emulator (PC)
+scripts/                     # People on the PC: lookups, drafts for the phone, reports, the live test
 ```
 
 ## Build & run
@@ -201,6 +207,40 @@ app, since releases are public, and kept sealed with the Android Keystore like t
 (`-Passistant.live=<repo>`, with `GATEWAY_TOKEN` in its environment), printing each reply, its time,
 and its changes as diffs.
 
+## People
+
+The People tab is what Network App was until 2.5: a private memory of the people you know. For each
+person it keeps their names, work and study, dated notes of what you talked about, what they need,
+and what they can offer. It has its own assistant, a check-in, a board of open needs, and its own
+settings. What it keeps and what leaves the phone is in [PRIVACY.md](PRIVACY.md).
+
+- **Kept apart from your notes.** People live in their own database on the phone (`people.db`),
+  never in your notes repo. Their backup is encrypted on the phone, with a passphrase only you know,
+  and kept in a separate private repo. Android's own backup leaves all of People out.
+- **The assistant.** Tell it about someone, or ask who could help with something. It reads only the
+  records a request needs, through the same [AI gateway](#the-ai-gateway) and key as "tell me
+  anything", and never searches the web. What it saves has Undo; deleting and merging wait for your
+  tap.
+- **Check-in.** It asks about people your phone or chat apps show but your list does not have, and
+  about details that may be old. Each source is off until you turn it on.
+- **On your PC.** `scripts/network-lookup.ps1` reads people from the encrypted backup, asking for the
+  passphrase each time; `scripts/queue-draft.ps1` sends a draft that only this phone can open, which
+  waits in People's assistant until you tap Send.
+
+### Moving from Network App
+
+Once, in this order:
+
+1. In Network App 0.21 or later, tap **Move to Notes**. It saves one last backup, gives the
+   check-in's answers to Notes on the phone (each app first checks the other's signing key), and
+   then saves nothing more.
+2. In Notes, open **People → Settings**: enter the GitHub token for the private data repo and the
+   backup passphrase, save, then tap **Check Network App's backup** and **Bring them into Notes**.
+   Notes reads Network App's last backup, puts the people in, and saves its own first backup,
+   `people-backup.enc.json` (debug builds: `debug-people-backup.enc.json`). Network App's file stays
+   as it was.
+3. Turn on **Drafts from your PC** and the check-in's sources again, in Notes.
+
 ## Deletion and recovery
 
 Notes cannot be deleted by swiping the list. Use the delete button inside a note and confirm; the
@@ -241,7 +281,8 @@ a release:
 ```
 
 This bumps the version, builds a signed APK, publishes a GitHub release, and updates
-`version.json`. The app offers the update on next launch.
+`version.json` with the APK's size and SHA-256. The app offers the update on next launch, and
+installs it only when the download comes from that releases repo and matches both.
 
 ## Signing
 
@@ -251,5 +292,5 @@ with a signature mismatch.
 
 ## Status
 
-- Working: notes in your GitHub repo with sync and clash handling, Markdown and rich editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, voice notes, Today and reminders from the repo's list, and the "tell me anything" assistant
+- Working: notes in your GitHub repo with sync and clash handling, Markdown and rich editing, nested lists, automatic Markdown paste, crash-safe autosave/editor resume, search, visual notebook markers, recoverable Trash, themes, in-app auto-update, voice notes, Today and reminders from the repo's list, the "tell me anything" assistant, and People
 - Backlog: tags, pinning, share/export

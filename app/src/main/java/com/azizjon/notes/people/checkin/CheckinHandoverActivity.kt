@@ -45,7 +45,9 @@ class CheckinHandoverActivity : ComponentActivity() {
                     }
                 } ?: throw IllegalArgumentException("The hand-over file could not be opened.")
                 val rows = CheckinHandover.decode(text)
-                (application as NotesApplication).people.checkins.takeHandover(rows)
+                val people = (application as NotesApplication).people
+                people.checkins.takeHandover(rows)
+                people.checkinSettings.markNetworkAppHandover(rows.size)
                 rows.size
             }
             taken.onSuccess { count ->

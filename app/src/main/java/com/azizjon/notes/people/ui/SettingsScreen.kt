@@ -54,6 +54,7 @@ fun SettingsScreen(
     inboxBusy: Boolean,
     peopleCount: Int,
     networkAppMove: NetworkAppMove,
+    networkAppHandover: Int?,
     onCheckNetworkApp: () -> Unit,
     onBringFromNetworkApp: () -> Unit,
     onOpenAppSettings: () -> Unit,
@@ -182,6 +183,7 @@ fun SettingsScreen(
                 Text("Bring your people from Network App", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 NetworkAppMoveCard(
                     move = networkAppMove,
+                    handover = networkAppHandover,
                     busy = backupState.busy,
                     backupConfigured = saved.configured,
                     onCheck = onCheckNetworkApp,
@@ -308,6 +310,7 @@ private fun FeedbackCard(
 @Composable
 private fun NetworkAppMoveCard(
     move: NetworkAppMove,
+    handover: Int?,
     busy: Boolean,
     backupConfigured: Boolean,
     onCheck: () -> Unit,
@@ -317,8 +320,21 @@ private fun NetworkAppMoveCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when (move) {
                 NetworkAppMove.NotChecked -> {
+                    if (handover == null) {
+                        Text(
+                            "First, in Network App, tap \"Move to Notes\". It saves one last backup and gives its check-in answers to Notes, so nothing is left behind.",
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else {
+                        Text(
+                            "Network App has moved: it gave Notes $handover check-in answers and saved its last backup.",
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     Text(
-                        "Do this once. First save the backup settings above: a GitHub token for the private data repository, and Network App's passphrase.",
+                        "Then save the backup settings above: a GitHub token for the private data repository, and Network App's passphrase.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
@@ -343,7 +359,7 @@ private fun NetworkAppMoveCard(
                 is NetworkAppMove.Done -> {
                     Text("${move.people} people are in Notes now.", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                     Text(
-                        "Notes' own backup is saved and opens. Next, open Network App and tap \"Move to Notes\", so the check-in's answers come too.",
+                        "Notes' own backup is saved and opens. Turn on drafts from your PC below, and the check-in's sources on its tab.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

@@ -118,6 +118,15 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
     private val _networkAppMove = MutableStateFlow<NetworkAppMove>(NetworkAppMove.NotChecked)
     val networkAppMove: StateFlow<NetworkAppMove> = _networkAppMove.asStateFlow()
 
+    /** The check-in answers Network App handed over, or null until it has ("Move to Notes" there). */
+    private val _networkAppHandover = MutableStateFlow(app.checkinSettings.networkAppHandover)
+    val networkAppHandover: StateFlow<Int?> = _networkAppHandover.asStateFlow()
+
+    /** The hand-over happens in another screen of the app, so the activity asks again on coming back. */
+    fun refreshNetworkAppHandover() {
+        _networkAppHandover.value = app.checkinSettings.networkAppHandover
+    }
+
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
