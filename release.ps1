@@ -7,7 +7,8 @@
     1. Bumps versionCode / versionName in app/build.gradle.kts
     2. Builds a signed release APK with the Gradle wrapper
     3. Creates a GitHub Release (with the APK) on the public releases repo
-    4. Updates version.json in the releases repo so the app offers the update on next launch
+    4. Updates version.json in the releases repo (with the APK's size and SHA-256, which the app
+       checks before installing) so the app offers the update on next launch
 
     The version bump in THIS repo is left uncommitted for you to review and commit.
 
@@ -42,6 +43,9 @@ $built = Join-Path $proj 'app\build\outputs\apk\release\app-release.apk'
 $named = Join-Path $proj "app\build\outputs\apk\release\Notes-$VersionName.apk"
 Copy-Item $built $named -Force
 Copy-Item $named (Join-Path $proj "Notes-$VersionName.apk") -Force
+# The app installs an update only when its size and SHA-256 match these (People's rules, since 2.5).
+$apkSizeBytes = (Get-Item -LiteralPath $named).Length
+$apkSha256 = (Get-FileHash -LiteralPath $named -Algorithm SHA256).Hash.ToLowerInvariant()
 
 Write-Host "==> Publishing GitHub release v$VersionName" -ForegroundColor Cyan
 gh release create "v$VersionName" $named --repo $releasesRepo --title "v$VersionName" --notes $Notes
@@ -57,6 +61,8 @@ $json = [ordered]@{
     versionCode = $VersionCode
     versionName = $VersionName
     apkUrl      = $apkUrl
+    apkSizeBytes = $apkSizeBytes
+    sha256      = $apkSha256
     notes       = $Notes
 } | ConvertTo-Json
 Set-Content -Path (Join-Path $releasesDir 'version.json') -Value $json

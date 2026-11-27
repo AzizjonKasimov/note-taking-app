@@ -8,36 +8,37 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
+import java.security.MessageDigest
 
 data class UpdateInfo(
     val versionCode: Long,
     val versionName: String,
     val apkUrl: String,
     val notes: String,
+    /** The APK's size and SHA-256 from the manifest; a download that differs is deleted unopened. */
+    val apkSizeBytes: Long,
+    val sha256: String,
 )
 
 /**
  * Checks a small JSON manifest for a newer release, downloads the signed APK, and
  * hands it to the system package installer.
  *
- * Hosting-agnostic: [MANIFEST_URL] can point at a GitHub raw file, a release asset,
- * or any static URL that returns the expected JSON shape:
- * `{ "versionCode": N, "versionName": "x.y", "apkUrl": "https://…/app.apk", "notes": "…" }`
+ * The manifest is `version.json` on the releases repo's main branch:
+ * `{ "versionCode": N, "versionName": "x.y", "apkUrl": "https://github.com/…/releases/download/…",
+ * "apkSizeBytes": N, "sha256": "…", "notes": "…" }`. The APK must come from that repo's releases, and
+ * its size and SHA-256 must match, or nothing is installed: since 2.5 the app also holds People
+ * (Network App until then), whose rules ask for this check (`release.ps1` writes both values).
  */
 class UpdateManager(private val context: Context) {
 
     suspend fun checkForUpdate(): UpdateInfo? = withContext(Dispatchers.IO) {
         val body = httpGet(MANIFEST_URL) ?: return@withContext null
-        val json = runCatching { JSONObject(body) }.getOrNull() ?: return@withContext null
-        val info = UpdateInfo(
-            versionCode = json.optLong("versionCode", -1),
-            versionName = json.optString("versionName", ""),
-            apkUrl = json.optString("apkUrl", ""),
-            notes = json.optString("notes", ""),
-        )
-        if (info.apkUrl.isBlank() || info.versionCode <= currentVersionCode()) null else info
+        parseUpdateManifest(body, currentVersionCode())
     }
 
     fun currentVersionCode(): Long {
@@ -56,23 +57,44 @@ class UpdateManager(private val context: Context) {
             dir.listFiles()?.forEach { it.delete() }
             val out = File(dir, "notes-${info.versionCode}.apk")
             val conn = open(info.apkUrl)
-            conn.connect()
-            val total = conn.contentLengthLong
-            conn.inputStream.use { input ->
-                out.outputStream().use { output ->
-                    val buffer = ByteArray(16 * 1024)
-                    var downloaded = 0L
-                    var read = input.read(buffer)
-                    while (read != -1) {
-                        output.write(buffer, 0, read)
-                        downloaded += read
-                        if (total > 0) onProgress(((downloaded * 100) / total).toInt())
-                        read = input.read(buffer)
+            try {
+                val code = conn.responseCode
+                if (code !in 200..299) throw IOException("The update server returned HTTP $code")
+                val reported = conn.contentLengthLong
+                if (reported > 0 && reported != info.apkSizeBytes) {
+                    throw IOException("The update's size does not match the release")
+                }
+                val digest = MessageDigest.getInstance("SHA-256")
+                var downloaded = 0L
+                var lastProgress = -1
+                conn.inputStream.use { input ->
+                    out.outputStream().use { output ->
+                        val buffer = ByteArray(16 * 1024)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            digest.update(buffer, 0, read)
+                            downloaded += read
+                            if (downloaded > info.apkSizeBytes) throw IOException("The update is larger than the release says")
+                            val progress = ((downloaded * 100) / info.apkSizeBytes).toInt().coerceAtMost(100)
+                            if (progress != lastProgress) {
+                                lastProgress = progress
+                                onProgress(progress)
+                            }
+                        }
                     }
                 }
+                if (!integrityMatches(downloaded, digest.digest().toHex(), info.apkSizeBytes, info.sha256)) {
+                    throw IOException("The update failed its check against the release")
+                }
+                out
+            } catch (failure: Exception) {
+                out.delete()
+                throw failure
+            } finally {
+                conn.disconnect()
             }
-            conn.disconnect()
-            out
         }
 
     fun installApk(file: File) {
@@ -86,10 +108,10 @@ class UpdateManager(private val context: Context) {
 
     private fun httpGet(url: String): String? = try {
         val conn = open(url)
-        if (conn.responseCode in 200..299) {
-            conn.inputStream.bufferedReader().use { it.readText() }
-        } else {
-            null
+        try {
+            if (conn.responseCode in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null
+        } finally {
+            conn.disconnect()
         }
     } catch (e: Exception) {
         null
@@ -105,8 +127,45 @@ class UpdateManager(private val context: Context) {
 
     companion object {
         // Static JSON manifest describing the latest release.
-        // Change this if you move hosting (e.g. to your own server).
         const val MANIFEST_URL =
             "https://raw.githubusercontent.com/AzizjonKasimov/note-taking-app-releases/main/version.json"
     }
 }
+
+/** The release the manifest offers, or null when it is no newer, or when anything in it fails a check. */
+internal fun parseUpdateManifest(body: String, currentVersionCode: Long): UpdateInfo? {
+    val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
+    val info = UpdateInfo(
+        versionCode = json.optLong("versionCode", -1),
+        versionName = json.optString("versionName", ""),
+        apkUrl = json.optString("apkUrl", ""),
+        notes = json.optString("notes", ""),
+        apkSizeBytes = json.optLong("apkSizeBytes", -1),
+        sha256 = json.optString("sha256", "").lowercase(),
+    )
+    val trusted = info.versionName.isNotBlank() &&
+        isTrustedReleaseUrl(info.apkUrl) &&
+        info.apkSizeBytes in 1..MAX_APK_SIZE_BYTES &&
+        info.sha256.matches(Regex("[0-9a-f]{64}"))
+    return if (trusted && info.versionCode > currentVersionCode) info else null
+}
+
+internal fun integrityMatches(actualSize: Long, actualSha256: String, expectedSize: Long, expectedSha256: String): Boolean =
+    actualSize == expectedSize && actualSha256.equals(expectedSha256, ignoreCase = true)
+
+/** Only an APK from the releases repo's own GitHub releases. */
+private fun isTrustedReleaseUrl(url: String): Boolean = runCatching {
+    val uri = URI(url)
+    uri.scheme == "https" &&
+        uri.host == "github.com" &&
+        uri.port == -1 &&
+        uri.userInfo == null &&
+        uri.query == null &&
+        uri.fragment == null &&
+        uri.path.startsWith("/AzizjonKasimov/note-taking-app-releases/releases/download/")
+}.getOrDefault(false)
+
+private fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+
+/** The release APK is about 100 MB (the speech engine); this leaves room without trusting any size. */
+private const val MAX_APK_SIZE_BYTES = 400L * 1024L * 1024L
