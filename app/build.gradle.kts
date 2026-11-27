@@ -192,6 +192,7 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.jgit)
     implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.security.crypto)
     implementation(files(sherpaOnnxAar).builtBy(fetchSherpaOnnx))
 
     debugImplementation(libs.androidx.ui.tooling)
@@ -202,4 +203,5 @@ dependencies {
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core)
 }

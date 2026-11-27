@@ -10,4 +10,16 @@
     <!-- Dictation audio is only kept until its text is saved. -->
     <exclude domain="file" path="recordings/" />
     <exclude domain="file" path="voice/" />
+    <!-- People (Network App until 2.5): its records and settings never leave the phone this way,
+         as Network App kept them (it turned this backup off). PeopleStorageTest checks the list. -->
+    <exclude domain="database" path="people.db" />
+    <exclude domain="database" path="people.db-wal" />
+    <exclude domain="database" path="people.db-shm" />
+    <exclude domain="database" path="people.db-journal" />
+    <exclude domain="sharedpref" path="people_backup.xml" />
+    <exclude domain="sharedpref" path="people_backup_secrets.xml" />
+    <exclude domain="sharedpref" path="people_capture_draft.xml" />
+    <exclude domain="sharedpref" path="people_pc_inbox.xml" />
+    <exclude domain="sharedpref" path="people_checkin_settings.xml" />
+    <exclude domain="sharedpref" path="people_assistant.xml" />
 </full-backup-content>

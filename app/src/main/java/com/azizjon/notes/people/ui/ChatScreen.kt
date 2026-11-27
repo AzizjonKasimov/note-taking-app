@@ -1,0 +1,411 @@
+package com.azizjon.notes.people.ui
+
+import android.net.Uri
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import com.azizjon.notes.people.ai.AgentClient
+import com.azizjon.notes.people.ai.AttachedPhoto
+import com.azizjon.notes.people.ai.ChatAttachment
+import com.azizjon.notes.people.ai.ChatMessage
+import com.azizjon.notes.people.ai.ChatRole
+import com.azizjon.notes.people.ai.ChatState
+import com.azizjon.notes.people.ai.PhotoLimits
+import com.azizjon.notes.people.data.NetworkSnapshot
+import com.azizjon.notes.people.feedback.AiFeedbackLabel
+import com.azizjon.notes.people.inbox.InboxDraft
+
+/**
+ * The single conversational surface for recording, correcting, and asking.
+ *
+ * Every message goes to the assistant, which decides what to look up and what
+ * to change. The thread shows what each reply saved, with an undo, and holds
+ * deletes and merges on a card until the user confirms them.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatScreen(
+    chat: ChatState,
+    snapshot: NetworkSnapshot,
+    draft: String,
+    photos: List<AttachedPhoto>,
+    preparingPhotos: Int,
+    focusRequested: Boolean,
+    consentRequested: Boolean,
+    feedbackTarget: ChatMessage?,
+    inboxDrafts: List<InboxDraft>,
+    onDraftChange: (String) -> Unit,
+    onAttachPhotos: (List<Uri>, Boolean) -> Unit,
+    onRemovePhoto: (Long) -> Unit,
+    newCaptureUri: () -> Uri,
+    onFocused: () -> Unit,
+    onSend: () -> Unit,
+    onOpenPerson: (Long) -> Unit,
+    onUndo: (Long) -> Unit,
+    onConfirmAction: (Long, String) -> Unit,
+    onKeepAction: (Long, String) -> Unit,
+    onConfirmConsent: () -> Unit,
+    onDismissConsent: () -> Unit,
+    onReportMessage: (Long) -> Unit,
+    onDismissFeedback: () -> Unit,
+    onSubmitFeedback: (AiFeedbackLabel, String) -> Unit,
+    onNewChat: () -> Unit,
+    onSendInboxDraft: (String) -> Unit,
+    onEditInboxDraft: (String) -> Unit,
+    onDiscardInboxDraft: (String) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    val busy = chat.phase.busy
+
+    LaunchedEffect(chat.messages.size, chat.phase) {
+        if (chat.messages.isNotEmpty()) listState.animateScrollToItem(chat.messages.lastIndex)
+    }
+
+    // Notes' window pans for the keyboard (the Today box relies on it), so the composer
+    // takes no keyboard padding of its own; with it the composer would be lifted twice.
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Assistant") },
+            actions = {
+                if (chat.messages.isNotEmpty()) {
+                    TextButton(onClick = onNewChat, enabled = !busy) { Text("New") }
+                }
+            },
+        )
+        Box(Modifier.weight(1f)) {
+            if (chat.messages.isEmpty()) {
+                // A waiting draft is the thing to do next, and the hints would be squeezed beside it.
+                if (inboxDrafts.isEmpty()) EmptyChatState(Modifier.align(Alignment.Center))
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(chat.messages, key = { it.id }) { message ->
+                        ChatMessageRow(
+                            message = message,
+                            snapshot = snapshot,
+                            busy = busy,
+                            onOpenPerson = onOpenPerson,
+                            onUndo = { onUndo(message.id) },
+                            onConfirmAction = { actionId -> onConfirmAction(message.id, actionId) },
+                            onKeepAction = { actionId -> onKeepAction(message.id, actionId) },
+                            onReport = onReportMessage,
+                        )
+                    }
+                    if (busy) {
+                        item("phase") { PhaseRow(chat.phase.label) }
+                    }
+                }
+            }
+        }
+        inboxDrafts.firstOrNull()?.let { waiting ->
+            HorizontalDivider()
+            InboxDraftCard(
+                draft = waiting,
+                count = inboxDrafts.size,
+                canSend = !busy && draft.isBlank() && photos.isEmpty() && preparingPhotos == 0,
+                busy = busy,
+                onSend = onSendInboxDraft,
+                onEdit = onEditInboxDraft,
+                onDiscard = onDiscardInboxDraft,
+            )
+        }
+        HorizontalDivider()
+        Composer(
+            draft = draft,
+            photos = photos,
+            preparingPhotos = preparingPhotos,
+            focusRequested = focusRequested,
+            busy = busy,
+            onDraftChange = onDraftChange,
+            onAttachPhotos = onAttachPhotos,
+            onRemovePhoto = onRemovePhoto,
+            newCaptureUri = newCaptureUri,
+            onFocused = onFocused,
+            onSend = onSend,
+        )
+    }
+
+    if (consentRequested) {
+        AssistantConsentDialog(onConfirm = onConfirmConsent, onDismiss = onDismissConsent)
+    }
+    if (feedbackTarget != null) {
+        FeedbackDialog(
+            responsePreview = feedbackTarget.text,
+            onDismiss = onDismissFeedback,
+            onSubmit = onSubmitFeedback,
+        )
+    }
+}
+
+@Composable
+private fun ChatMessageRow(
+    message: ChatMessage,
+    snapshot: NetworkSnapshot,
+    busy: Boolean,
+    onOpenPerson: (Long) -> Unit,
+    onUndo: () -> Unit,
+    onConfirmAction: (String) -> Unit,
+    onKeepAction: (String) -> Unit,
+    onReport: (Long) -> Unit,
+) {
+    val fromUser = message.role == ChatRole.USER
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = if (fromUser) Alignment.End else Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (message.thumbnails.isNotEmpty()) SentPhotosRow(message.thumbnails)
+        if (message.text.isNotBlank()) {
+            Surface(
+                color = when {
+                    message.failed -> MaterialTheme.colorScheme.errorContainer
+                    fromUser -> MaterialTheme.colorScheme.primaryContainer
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                },
+                contentColor = when {
+                    message.failed -> MaterialTheme.colorScheme.onErrorContainer
+                    fromUser -> MaterialTheme.colorScheme.onPrimaryContainer
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(if (fromUser) 0.9f else 1f),
+            ) {
+                Text(message.text, Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+            }
+        }
+        when (val attachment = message.attachment) {
+            is ChatAttachment.AgentResult -> AgentResultCard(
+                result = attachment,
+                snapshot = snapshot,
+                busy = busy,
+                onUndo = onUndo,
+                onConfirm = onConfirmAction,
+                onKeep = onKeepAction,
+                onOpenPerson = onOpenPerson,
+            )
+            null -> Unit
+        }
+        if (message.fromGateway) {
+            FeedbackRow(reportedLabel = message.reportedLabel, enabled = !busy) { onReport(message.id) }
+        }
+    }
+}
+
+/**
+ * The one place a bad answer can be labelled, right under the answer itself.
+ *
+ * It has to sit here rather than in Settings: once the thread is cleared there
+ * is nothing left to point at.
+ */
+@Composable
+private fun FeedbackRow(reportedLabel: String?, enabled: Boolean, onReport: () -> Unit) {
+    if (reportedLabel != null) {
+        Text(
+            "Reported: " + AiFeedbackLabel.titleFor(reportedLabel),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        TextButton(onClick = onReport, enabled = enabled) {
+            Text("Report a problem", style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
+
+/**
+ * A draft a session on the PC queued, waiting above the message box. The whole
+ * text is shown so it is read before it goes anywhere; nothing reaches the
+ * assistant until Send is tapped.
+ */
+@Composable
+private fun InboxDraftCard(
+    draft: InboxDraft,
+    count: Int,
+    canSend: Boolean,
+    busy: Boolean,
+    onSend: (String) -> Unit,
+    onEdit: (String) -> Unit,
+    onDiscard: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "Draft from your PC" + if (count > 1) " · 1 of $count" else "",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text("Queued ${formatTimestamp(draft.queuedAt)}", style = MaterialTheme.typography.bodySmall)
+            // Keyed so a long draft's scroll position does not carry over to the next one.
+            key(draft.id) {
+                Text(draft.text, Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()))
+            }
+            if (!canSend && !busy) {
+                Text("Send or clear what you typed to send this one.", style = MaterialTheme.typography.bodySmall)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = { onSend(draft.id) }, enabled = canSend) { Text("Send") }
+                OutlinedButton(onClick = { onEdit(draft.id) }, enabled = !busy) { Text("Edit") }
+                TextButton(onClick = { onDiscard(draft.id) }) { Text("Discard") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhaseRow(label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        CircularProgressIndicator(Modifier.padding(2.dp), strokeWidth = 2.dp)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun Composer(
+    draft: String,
+    photos: List<AttachedPhoto>,
+    preparingPhotos: Int,
+    focusRequested: Boolean,
+    busy: Boolean,
+    onDraftChange: (String) -> Unit,
+    onAttachPhotos: (List<Uri>, Boolean) -> Unit,
+    onRemovePhoto: (Long) -> Unit,
+    newCaptureUri: () -> Uri,
+    onFocused: () -> Unit,
+    onSend: () -> Unit,
+) {
+    // Held as a TextFieldValue so text put in from elsewhere - a check-in
+    // question, a shared link - leaves the cursor at its end, ready to type on.
+    var field by remember { mutableStateOf(TextFieldValue(draft, TextRange(draft.length))) }
+    LaunchedEffect(draft) {
+        if (field.text != draft) field = TextFieldValue(draft, TextRange(draft.length))
+    }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(focusRequested) {
+        if (focusRequested) {
+            focus.requestFocus()
+            onFocused()
+        }
+    }
+
+    Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (photos.isNotEmpty() || preparingPhotos > 0) {
+            AttachedPhotosRow(photos, preparingPhotos, enabled = !busy, onRemove = onRemovePhoto)
+        }
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            PhotoButton(
+                enabled = !busy && photos.size + preparingPhotos < PhotoLimits.MAX_PHOTOS,
+                onPicked = { onAttachPhotos(it, false) },
+                onCaptured = { onAttachPhotos(listOf(it), true) },
+                newCaptureUri = newCaptureUri,
+            )
+            OutlinedTextField(
+                value = field,
+                onValueChange = {
+                    if (it.text.length <= AgentClient.MAX_INPUT_CHARACTERS) {
+                        field = it
+                        onDraftChange(it.text)
+                    }
+                },
+                enabled = !busy,
+                placeholder = { Text("Tell me about someone, or ask anything") },
+                maxLines = 6,
+                modifier = Modifier.weight(1f).focusRequester(focus),
+            )
+            FilledIconButton(
+                onClick = onSend,
+                enabled = (draft.isNotBlank() || photos.isNotEmpty()) && preparingPhotos == 0 && !busy,
+            ) {
+                Text("↑")
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyChatState(modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier.padding(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Start a conversation", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Tell me about someone you spoke with, and I will save it on the right people.")
+            Text("Send a photo of a business card or a screenshot of someone's profile, and I will save who they are.")
+            Text("Ask anything about your network: who could help with a goal, what you last discussed with someone, who works where.")
+            Text(
+                "Changes save straight away and can be undone from my reply. Deleting and merging always wait for you to confirm.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AssistantConsentDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Let the assistant read your people?") },
+        text = {
+            Text(
+                "To answer questions and file things on the right people, the assistant reads whichever records it needs " +
+                    "and sends them through your private AI gateway to Anthropic: names, positions, education, locations, " +
+                    "relationship context, tags, profile notes, notes, needs, capabilities, background facts, and dates. " +
+                    "It never searches the web. " +
+                    "Photos you attach go with the message they were sent with and are not kept. " +
+                    "Contact values stay on this phone. What it saves can be undone from its reply, and deleting or merging " +
+                    "always waits for you. You can revoke this in Settings.",
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Allow") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
+}

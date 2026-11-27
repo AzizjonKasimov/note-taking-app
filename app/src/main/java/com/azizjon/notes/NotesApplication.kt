@@ -18,6 +18,8 @@ import com.azizjon.notes.life.LifeRepository
 import com.azizjon.notes.life.NoteFiles
 import com.azizjon.notes.life.SyncWorker
 import com.azizjon.notes.life.TokenStore
+import com.azizjon.notes.people.PeopleModule
+import com.azizjon.notes.people.checkin.EveningCheckin
 import com.azizjon.notes.reminders.ReminderAlarms
 import com.azizjon.notes.reminders.ReminderNotifications
 import com.azizjon.notes.reminders.Reminders
@@ -41,6 +43,9 @@ class NotesApplication : Application() {
 
     /** The AI gateway's key, which the user enters in Settings. */
     val gatewayKey: TokenStore by lazy { TokenStore(this, TokenStore.GATEWAY_PREFS_NAME, TokenStore.GATEWAY_KEY_ALIAS) }
+
+    /** People (Network App until 2.5): its records, check-in, backup, PC drafts, and assistant. */
+    val people: PeopleModule by lazy { PeopleModule(this) { gatewayKey.read() } }
 
     /** The "tell me anything" box on Today: the assistant's conversation since the app started. */
     val assistant: AssistantSession by lazy {
@@ -79,6 +84,8 @@ class NotesApplication : Application() {
         deleteSharedPreferences("github_backup_secrets")
         deleteSharedPreferences("github_backup")
         if (life.isCloned()) SyncWorker.schedulePeriodic(this)
+        // Re-creates People's evening check-in if its schedule was ever lost; leaves a live one alone.
+        EveningCheckin.schedule(this, people.checkinSettings.state, replace = false)
         // The reminders' alarms follow the connection: set once the repo is on the phone, gone without it.
         appScope.launch {
             life.connection.collect { state ->

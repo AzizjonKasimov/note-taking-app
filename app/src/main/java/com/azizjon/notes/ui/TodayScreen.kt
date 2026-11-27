@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -84,7 +85,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /** The two tabs at the bottom of Today and the notes list. */
-enum class MainTab { TODAY, NOTES }
+enum class MainTab { TODAY, NOTES, PEOPLE }
 
 @Composable
 fun MainTabs(selected: MainTab, onSelect: (MainTab) -> Unit) {
@@ -100,6 +101,12 @@ fun MainTabs(selected: MainTab, onSelect: (MainTab) -> Unit) {
             onClick = { onSelect(MainTab.NOTES) },
             icon = { Icon(painterResource(R.drawable.ic_all_notes), contentDescription = null) },
             label = { Text("Notes") },
+        )
+        NavigationBarItem(
+            selected = selected == MainTab.PEOPLE,
+            onClick = { onSelect(MainTab.PEOPLE) },
+            icon = { Icon(Icons.Filled.Person, contentDescription = null) },
+            label = { Text("People") },
         )
     }
 }

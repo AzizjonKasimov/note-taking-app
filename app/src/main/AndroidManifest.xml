@@ -15,6 +15,18 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- People (Network App until 2.5). A people-assistant turn waits tens of seconds on the gateway;
+         without a foreground service the process is frozen the moment the user leaves the app, with
+         the reply still in flight. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- People's check-in asks about numbers the user saves. Requested only when the user turns that
+         on, and only names are read. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <queries>
+        <!-- People's check-in answers come from Network App once, after Notes checks its signature. -->
+        <package android:name="com.azizjon.network" />
+    </queries>
 
     <application
         android:name=".NotesApplication"
@@ -27,16 +39,56 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Notes">
 
+        <!-- Single task, so a photo or text shared from another app, and People's evening check-in,
+             land in the running app and its conversation rather than in a second copy of it. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.Notes">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
+
+        <!-- Takes the check-in's answers from Network App once, app to app (CheckinHandover). It checks
+             that the caller is Network App signed with its own key, so it is exported without a filter. -->
+        <activity
+            android:name=".people.checkin.CheckinHandoverActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <service
+            android:name=".people.ai.AiRequestService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- People's check-in: sees who wrote in Telegram, WhatsApp, KakaoTalk and LinkedIn, once the
+             user grants notification access. Only the system can bind it. -->
+        <service
+            android:name=".people.checkin.ChatNotificationListener"
+            android:exported="true"
+            android:label="@string/chat_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <receiver
             android:name=".reminders.ReminderReceiver"

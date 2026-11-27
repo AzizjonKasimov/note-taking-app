@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">Notes</string>
+    <!-- People (Network App until 2.5) -->
+    <string name="ai_request_channel_name">People assistant</string>
+    <string name="ai_request_notification_title">The people assistant is working</string>
+    <string name="ai_request_notification_text">It keeps going while you use other apps.</string>
+    <string name="checkin_channel_name">Evening check-in</string>
+    <string name="chat_listener_label">Notes: people check-in</string>
 </resources>

@@ -1,0 +1,147 @@
+package com.azizjon.notes.people.ai
+
+import com.azizjon.notes.life.TokenStore
+import android.content.Context
+import android.util.Log
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.azizjon.notes.people.checkin.NameKey
+import com.azizjon.notes.people.data.AffiliationEntity
+import com.azizjon.notes.people.data.AssistantStore
+import com.azizjon.notes.people.data.CapabilityEntity
+import com.azizjon.notes.people.data.NetworkDatabase
+import com.azizjon.notes.people.data.PersonEntity
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * Drives the real gateway and model with the token the user saved in Settings.
+ *
+ * The token is read from the app's own encrypted preferences rather than pushed
+ * to the device for the test, so the run exercises exactly the credential path
+ * the app uses and no copy of the secret is left in /data/local/tmp. The
+ * records live in an in-memory database: nothing real is read or written.
+ */
+@RunWith(AndroidJUnit4::class)
+class AssistantLiveInstrumentedTest {
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    @Test
+    fun theAgentFilesCapturesAnswersQuestionsKeepsCheckinNamesAndOnlyQueuesDeletes() = runBlocking {
+        val arguments = InstrumentationRegistry.getArguments()
+        assumeTrue("Live gateway test is opt-in", arguments.getString("liveGateway") == "true")
+
+        // The app's one AI key, entered in Settings → Assistant; never passed in or staged on the device.
+        val key = TokenStore(context, TokenStore.GATEWAY_PREFS_NAME, TokenStore.GATEWAY_KEY_ALIAS)
+        assertTrue(
+            "Save the AI key in the app's Settings → Assistant before running this test",
+            !key.read().isNullOrBlank(),
+        )
+        val database = Room.inMemoryDatabaseBuilder(context, NetworkDatabase::class.java).build()
+        try {
+            val store = AssistantStore(database)
+            val agent = AssistantAgent(AgentClient { key.read() }, AssistantTools(store))
+            val dao = database.networkDao()
+            val now = System.currentTimeMillis()
+            // Ordinary-looking names: a name that reads as placeholder data makes
+            // the model hesitate to treat the note as real, which the app never hits.
+            val dana = dao.savePerson(PersonEntity(name = "Dana Whitfield", createdAt = now, updatedAt = now))
+            dao.insertCapability(CapabilityEntity(personId = dana, text = "Knows seed investors in Berlin.", lastConfirmedAt = now, createdAt = now))
+            val priya = dao.savePerson(PersonEntity(name = "Priya Raman", createdAt = now, updatedAt = now))
+
+            // Work is a position, study is education, and a volunteer shift is
+            // neither, however organised it sounds.
+            val capture = liveTurn(
+                agent,
+                "capture with work, study, and neither",
+                "I met Marta Okafor today. She is a product designer at Brightline Studio, studied Spanish at " +
+                    "Cedar Hill Language Institute last year, and volunteers at Harbor Animal Shelter on weekends.",
+            )
+            val afterCapture = store.snapshot()
+            val marta = afterCapture.people.firstOrNull { it.name.contains("Marta", ignoreCase = true) }
+            assertNotNull("Marta should have been created, reply was: ${capture.reply}", marta)
+            val (study, work) = afterCapture.affiliationsFor(marta!!.id).partition { it.isEducation }
+            val workText = work.joinToString(" | ") { it.label }
+            val studyText = study.joinToString(" | ") { it.label }
+            assertTrue("The job must be a position, got '$workText'", workText.contains("Brightline", ignoreCase = true))
+            listOf("Spanish", "Cedar Hill", "Shelter").forEach { word ->
+                assertFalse("'$word' came back as a position: '$workText'", workText.contains(word, ignoreCase = true))
+            }
+            assertFalse("Volunteering came back as education: '$studyText'", studyText.contains("Shelter", ignoreCase = true))
+            assertTrue("The conversation should be kept as a note", afterCapture.interactionsFor(marta.id).isNotEmpty())
+            Log.i(TAG, "capture: ${work.size} work, ${study.size} study, ${afterCapture.factsFor(marta.id).size} facts")
+
+            // One message, two saved people.
+            val both = liveTurn(agent, "two people at once", "Dana Whitfield and Priya Raman both joined Lumen Labs as advisors.")
+            val afterBoth = store.snapshot()
+            listOf(dana, priya).forEach { id ->
+                assertTrue(
+                    "person $id should hold a Lumen Labs position, reply was: ${both.reply}",
+                    afterBoth.affiliationsFor(id).any { it.organization.contains("Lumen", ignoreCase = true) },
+                )
+            }
+
+            // A question reads and answers, and writes nothing.
+            val question = liveTurn(agent, "question", "Who could introduce me to seed investors?")
+            assertTrue("A question must not write anything", question.log.changes.isEmpty())
+            assertTrue("Dana should be named, reply was: ${question.reply}", question.reply.orEmpty().contains("Dana"))
+
+            // The check-in's opening line for someone saved under another name:
+            // the note goes on them, and the phone's name for them is kept.
+            val jordan = dao.savePerson(PersonEntity(name = "Jordan Kim", createdAt = now, updatedAt = now))
+            dao.insertAffiliation(
+                AffiliationEntity(personId = jordan, organization = "Quanta Health", role = "Data scientist", lastConfirmedAt = now, createdAt = now),
+            )
+            val checkin = liveTurn(
+                agent,
+                "check-in name of a saved person",
+                "\"Jordan (Quanta Health)\" (saved in my phone): we talked about climate-tech founders again.",
+            )
+            val afterCheckin = store.snapshot()
+            assertTrue(
+                "No second Jordan should be created, reply was: ${checkin.reply}",
+                afterCheckin.people.count { it.name.contains("Jordan", ignoreCase = true) } == 1,
+            )
+            assertTrue(
+                "The phone's name should be kept as another name, reply was: ${checkin.reply}",
+                afterCheckin.person(jordan)!!.otherNames.any { NameKey.exact(it) == NameKey.exact("Jordan (Quanta Health)") },
+            )
+            assertTrue("The conversation should be saved on Jordan", afterCheckin.interactionsFor(jordan).isNotEmpty())
+
+            // A delete only ever queues for the user.
+            val deletion = liveTurn(agent, "delete request", "Please delete Priya Raman from my network.")
+            assertTrue(
+                "The delete should wait for confirmation, reply was: ${deletion.reply}",
+                deletion.log.pending.any { it is PendingAction.DeletePerson && it.personId == priya },
+            )
+            assertNotNull("Nothing is deleted before the user confirms", dao.person(priya))
+
+            // One undo takes back everything the two-person reply saved.
+            store.undo(both.log.changes, System.currentTimeMillis())
+            assertTrue(store.snapshot().affiliations.none { it.organization.contains("Lumen", ignoreCase = true) })
+        } finally {
+            database.close()
+        }
+    }
+
+    private suspend fun liveTurn(agent: AssistantAgent, name: String, message: String): AgentOutcome {
+        val started = System.currentTimeMillis()
+        val outcome = agent.run(message, photos = emptyList(), history = emptyList()) {}
+        val elapsed = System.currentTimeMillis() - started
+        Log.i(TAG, "$name took $elapsed ms, ${outcome.log.calls.size} tool calls, ${outcome.log.saved.size} saved")
+        assertNull("Live turn '$name' failed after $elapsed ms: ${outcome.error}", outcome.error)
+        return outcome
+    }
+
+    private companion object {
+        const val TAG = "LiveGatewayTiming"
+    }
+}

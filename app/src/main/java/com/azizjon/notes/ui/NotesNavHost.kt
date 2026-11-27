@@ -23,6 +23,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.azizjon.notes.NotesApplication
 import com.azizjon.notes.life.Connection
+import com.azizjon.notes.people.ui.NetworkViewModel
+import com.azizjon.notes.people.ui.PeopleApp
 import com.azizjon.notes.reminders.Reminders
 import com.azizjon.notes.ui.theme.AppThemeMode
 import com.azizjon.notes.update.UpdatePrompt
@@ -34,6 +36,7 @@ object Routes {
     const val EDIT = "edit"
     const val SETTINGS = "settings"
     const val TRASH = "trash"
+    const val PEOPLE = "people"
     const val ARG_PATH = "path"
     const val ARG_NEW = "new"
     const val ARG_VOICE = "voice"
@@ -41,11 +44,15 @@ object Routes {
         "$EDIT?$ARG_PATH=${Uri.encode(path)}&$ARG_NEW=$isNew&$ARG_VOICE=$voice"
 }
 
-/** App entry composable: the connect screen until the repo is on the phone, then Today and the notes. */
+/**
+ * App entry composable: the connect screen until the repo is on the phone, then Today, the notes, and
+ * People. [people] belongs to the activity, which also hands it shares and notification taps.
+ */
 @Composable
 fun NotesApp(
     themeMode: AppThemeMode,
     onThemeModeChange: (AppThemeMode) -> Unit,
+    people: NetworkViewModel,
 ) {
     val viewModel: NotesViewModel = viewModel(factory = NotesViewModel.Factory)
     val startupState by viewModel.startupState.collectAsStateWithLifecycle()
@@ -58,7 +65,7 @@ fun NotesApp(
         }
         else -> {
             val start = (startupState as? AppStartupState.ResumeEditor)?.let { Routes.edit(it.path, it.isNew) }
-            NotesNavGraph(viewModel, start ?: Routes.TODAY, themeMode, onThemeModeChange)
+            NotesNavGraph(viewModel, people, start ?: Routes.TODAY, themeMode, onThemeModeChange)
         }
     }
 
@@ -72,6 +79,7 @@ private fun todayViewModel(): TodayViewModel = viewModel(factory = TodayViewMode
 @Composable
 private fun NotesNavGraph(
     viewModel: NotesViewModel,
+    people: NetworkViewModel,
     startDestination: String,
     themeMode: AppThemeMode,
     onThemeModeChange: (AppThemeMode) -> Unit,
@@ -101,6 +109,15 @@ private fun NotesNavGraph(
     fun selectTab(tab: MainTab) = when (tab) {
         MainTab.TODAY -> showToday()
         MainTab.NOTES -> navController.navigate(Routes.LIST) { launchSingleTop = true }
+        MainTab.PEOPLE -> navController.navigate(Routes.PEOPLE) { launchSingleTop = true }
+    }
+
+    // A photo or text shared from another app, or People's evening check-in, asks for People.
+    val requestedPeopleSection by people.requestedSection.collectAsStateWithLifecycle()
+    LaunchedEffect(requestedPeopleSection) {
+        if (requestedPeopleSection == null) return@LaunchedEffect
+        val route = navController.currentDestination?.route
+        if (route != Routes.PEOPLE && route?.startsWith(Routes.EDIT) != true) selectTab(MainTab.PEOPLE)
     }
 
     // A reminder tapped while the app is open shows Today, unless a note is open in the editor.
@@ -188,6 +205,13 @@ private fun NotesNavGraph(
             TrashScreen(
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.PEOPLE) {
+            PeopleApp(
+                viewModel = people,
+                bottomBar = { MainTabs(MainTab.PEOPLE, ::selectTab) },
+                onOpenAppSettings = { navController.navigate(Routes.SETTINGS) },
             )
         }
     }

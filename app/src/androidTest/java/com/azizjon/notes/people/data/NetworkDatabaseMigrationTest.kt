@@ -1,0 +1,374 @@
+package com.azizjon.notes.people.data
+
+import android.content.Context
+import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.azizjon.notes.people.checkin.CheckinEntity
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class NetworkDatabaseMigrationTest {
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    @After
+    fun cleanUp() {
+        context.deleteDatabase(TEST_DATABASE)
+    }
+
+    @Test
+    fun migrationFromVersionOnePreservesRowsAndMovesTheStoredJobToAPosition() = runBlocking {
+        createVersionOneDatabase()
+
+        val database = Room.databaseBuilder(context, NetworkDatabase::class.java, TEST_DATABASE)
+            .addMigrations(
+                NetworkDatabase.MIGRATION_1_2,
+                NetworkDatabase.MIGRATION_2_3,
+                NetworkDatabase.MIGRATION_3_4,
+                NetworkDatabase.MIGRATION_4_5,
+                NetworkDatabase.MIGRATION_5_6,
+                NetworkDatabase.MIGRATION_6_7,
+                NetworkDatabase.MIGRATION_7_8,
+                NetworkDatabase.MIGRATION_8_9,
+                NetworkDatabase.MIGRATION_9_10,
+            )
+            .build()
+        try {
+            val dao = database.networkDao()
+            assertEquals("Legacy Person", dao.allPeople().single().name)
+            // Nobody had other names or former names before, and one can be added straight away.
+            assertEquals("", dao.allPeople().single().aliases)
+            assertEquals("", dao.allPeople().single().formerAliases)
+            dao.addAlias(1, "Legacy (Corp)", now = 9)
+            assertEquals(listOf("Legacy (Corp)"), dao.allPeople().single().otherNames)
+
+            // The check-in starts with nothing to ask, and records a sighting once.
+            val checkins = database.checkinDao()
+            assertTrue(checkins.all().isEmpty())
+            val sighting = CheckinEntity("chat:telegram:ana lee", "telegram", "Ana Lee", 1_000L, 1_000L, CheckinEntity.STATUS_OPEN, 1_000L)
+            checkins.recordSighting(sighting)
+            checkins.recordSighting(sighting.copy(name = "Ana Lee 🙂", lastSeenAt = 2_000L))
+            val stored = checkins.all().single()
+            assertEquals("Ana Lee 🙂", stored.name)
+            assertEquals(2_000L, stored.lastSeenAt)
+            assertEquals(1_000L, stored.firstSeenAt)
+            assertEquals(InteractionEntity.ORIGIN_MANUAL, dao.allInteractions().single().origin)
+            assertNull(dao.allNeeds().single().sourceInteractionId)
+            // Nothing could be marked helped before, so every need is still waiting.
+            assertNull(dao.allNeeds().single().helpedAt)
+            assertEquals(NeedEntity.STATUS_ACTIVE, dao.allNeeds().single().status)
+            assertTrue(dao.allCapabilities().single().active)
+            assertNull(dao.allCapabilities().single().sourceInteractionId)
+
+            // The single organization/role pair becomes one current position, so an
+            // upgrade never silently drops where somebody works.
+            val affiliation = dao.allAffiliations().single()
+            assertEquals(1L, affiliation.personId)
+            assertEquals("Legacy Corp", affiliation.organization)
+            assertEquals("Legacy role", affiliation.role)
+            assertTrue(affiliation.current)
+            // A position recorded before the work/education split is work.
+            assertFalse(affiliation.isEducation)
+            assertTrue(dao.allFacts().isEmpty())
+            // Feedback arrives empty on an upgrade and is writable straight away.
+            assertTrue(dao.allFeedback().isEmpty())
+            dao.insertFeedback(
+                AiFeedbackEntity(
+                    stage = AiFeedbackEntity.Stage.PROPOSAL,
+                    label = "wrong_target",
+                    userMessage = "synthetic message",
+                    assistantMessage = "synthetic answer",
+                    appVersion = "test",
+                    createdAt = 1_000L,
+                ),
+            )
+            assertEquals("wrong_target", dao.allFeedback().single().label)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun aPersonCanHoldSeveralConcurrentPositions() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, NetworkDatabase::class.java).build()
+        try {
+            val dao = database.networkDao()
+            val personId = dao.savePerson(PersonEntity(name = "Synthetic Person", createdAt = 1, updatedAt = 1))
+            dao.insertAffiliation(
+                AffiliationEntity(personId = personId, organization = "Northwind Labs", role = "CEO", lastConfirmedAt = 2, createdAt = 2),
+            )
+            dao.insertAffiliation(
+                AffiliationEntity(personId = personId, organization = "Sample Ventures", role = "CTO", lastConfirmedAt = 3, createdAt = 3),
+            )
+
+            val stored = dao.allAffiliations()
+
+            assertEquals(2, stored.size)
+            assertEquals(setOf("Northwind Labs", "Sample Ventures"), stored.map { it.organization }.toSet())
+            assertTrue(stored.all { it.current })
+
+            // Deleting the person takes their positions with them.
+            dao.deletePerson(dao.allPeople().single())
+            assertTrue(dao.allAffiliations().isEmpty())
+        } finally {
+            database.close()
+        }
+    }
+
+    /** Helping with a need and the need being over are separate facts, and each can be taken back. */
+    @Test
+    fun helpingWithANeedIsRecordedApartFromClosingIt() = runBlocking<Unit> {
+        val database = Room.inMemoryDatabaseBuilder(context, NetworkDatabase::class.java).build()
+        try {
+            val dao = database.networkDao()
+            val repository = NetworkRepository(dao)
+            val personId = dao.savePerson(PersonEntity(name = "Synthetic Person", createdAt = 1, updatedAt = 1))
+            dao.insertNeed(NeedEntity(personId = personId, text = "Find a synthetic investor", lastConfirmedAt = 2, createdAt = 2))
+
+            repository.setNeedHelped(dao.allNeeds().single(), helped = true)
+            val helped = dao.allNeeds().single()
+            assertNotNull(helped.helpedAt)
+            // Helping is not solving: the need stays open, dated as before.
+            assertEquals(NeedEntity.STATUS_ACTIVE, helped.status)
+            assertEquals(2L, helped.lastConfirmedAt)
+
+            repository.setNeedActive(helped, active = false)
+            val closed = dao.allNeeds().single()
+            assertEquals(NeedEntity.STATUS_CLOSED, closed.status)
+            assertEquals(helped.helpedAt, closed.helpedAt)
+            assertTrue(closed.lastConfirmedAt > 2L)
+
+            repository.setNeedActive(closed, active = true)
+            repository.setNeedHelped(dao.allNeeds().single(), helped = false)
+            val reopened = dao.allNeeds().single()
+            assertEquals(NeedEntity.STATUS_ACTIVE, reopened.status)
+            assertNull(reopened.helpedAt)
+            assertEquals("Find a synthetic investor", reopened.text)
+
+            // A need deleted in the meantime is reported, not silently skipped.
+            dao.deleteNeed(reopened.id)
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { repository.setNeedHelped(reopened, helped = true) }
+            }
+        } finally {
+            database.close()
+        }
+    }
+
+    /**
+     * The fault this fixes: a capture about one person filed under another,
+     * which used to leave deleting and retyping the note as the only remedy.
+     */
+    @Test
+    fun movingANoteCarriesTheRecordsItCreatedAndLeavesTheRestBehind() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, NetworkDatabase::class.java).build()
+        try {
+            val dao = database.networkDao()
+            val wrongPerson = dao.savePerson(PersonEntity(name = "Synthetic Bastien", createdAt = 1, updatedAt = 1))
+            val noteId = dao.insertInteraction(
+                InteractionEntity(
+                    personId = wrongPerson,
+                    note = "Synthetic note that belongs to somebody else",
+                    occurredAt = 2,
+                    createdAt = 2,
+                    origin = InteractionEntity.ORIGIN_AI_REVIEWED,
+                ),
+            )
+            dao.insertNeed(NeedEntity(personId = wrongPerson, text = "From the note", lastConfirmedAt = 2, createdAt = 2, sourceInteractionId = noteId))
+            dao.insertCapability(CapabilityEntity(personId = wrongPerson, text = "From the note", lastConfirmedAt = 2, createdAt = 2, sourceInteractionId = noteId))
+            dao.insertAffiliation(AffiliationEntity(personId = wrongPerson, organization = "Northwind Labs", role = "CTO", lastConfirmedAt = 2, createdAt = 2, sourceInteractionId = noteId))
+            dao.insertFact(FactEntity(personId = wrongPerson, text = "From the note", lastConfirmedAt = 2, createdAt = 2, sourceInteractionId = noteId))
+            // Recorded by hand, so it is genuinely this person's and must not move.
+            dao.insertNeed(NeedEntity(personId = wrongPerson, text = "Recorded by hand", lastConfirmedAt = 3, createdAt = 3))
+
+            val moved = dao.moveInteraction(noteId, MoveDestination.NewPerson("Synthetic Alain"), now = 10)
+
+            assertEquals("Synthetic Alain", moved.personName)
+            assertEquals(4, moved.records)
+            assertEquals(moved.personId, dao.allInteractions().single().personId)
+            assertEquals(moved.personId, dao.allCapabilities().single().personId)
+            assertEquals(moved.personId, dao.allAffiliations().single().personId)
+            assertEquals(moved.personId, dao.allFacts().single().personId)
+
+            val needs = dao.allNeeds().associateBy { it.text }
+            assertEquals(moved.personId, needs.getValue("From the note").personId)
+            assertEquals(wrongPerson, needs.getValue("Recorded by hand").personId)
+            assertEquals(2, dao.allPeople().size)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun aNoteCanBeMovedOntoAnExistingPersonButNotOntoADuplicateNameOrItself() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, NetworkDatabase::class.java).build()
+        try {
+            val dao = database.networkDao()
+            val wrongPerson = dao.savePerson(PersonEntity(name = "Synthetic Bastien", createdAt = 1, updatedAt = 1))
+            val rightPerson = dao.savePerson(PersonEntity(name = "Synthetic Alain", createdAt = 1, updatedAt = 1))
+            val noteId = dao.insertInteraction(
+                InteractionEntity(personId = wrongPerson, note = "Synthetic note", occurredAt = 2, createdAt = 2),
+            )
+
+            // Creating a second "Synthetic Alain" would split one person in two.
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { dao.moveInteraction(noteId, MoveDestination.NewPerson("synthetic alain"), now = 10) }
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { dao.moveInteraction(noteId, MoveDestination.Existing(wrongPerson), now = 10) }
+            }
+            assertEquals(wrongPerson, dao.allInteractions().single().personId)
+
+            val moved = dao.moveInteraction(noteId, MoveDestination.Existing(rightPerson), now = 10)
+
+            assertEquals(rightPerson, moved.personId)
+            assertEquals(0, moved.records)
+            assertEquals(rightPerson, dao.allInteractions().single().personId)
+            assertEquals(2, dao.allPeople().size)
+        } finally {
+            database.close()
+        }
+    }
+
+    /**
+     * The check-in's "Already saved" and a merge both leave the names a person
+     * turned up under on the person, so the check-in recognizes them afterwards.
+     */
+    @Test
+    fun linkingAndMergingKeepTheNamesSomeoneTurnedUpUnder() = runBlocking<Unit> {
+        val database = Room.inMemoryDatabaseBuilder(context, NetworkDatabase::class.java).build()
+        try {
+            val dao = database.networkDao()
+            val repository = NetworkRepository(dao)
+            val minsu = dao.savePerson(PersonEntity(name = "Synthetic Minsu Kim", location = "Seoul", createdAt = 1, updatedAt = 1))
+            val duplicate = dao.savePerson(PersonEntity(name = "Synthetic Minsu", aliases = "김민수", createdAt = 1, updatedAt = 1))
+
+            val linked = repository.addOtherName(minsu, "Synthetic Minsu (Lumen CTO)")
+            assertEquals(listOf("Synthetic Minsu (Lumen CTO)"), linked.otherNames)
+            // Only the names changed.
+            assertEquals("Seoul", dao.person(minsu)!!.location)
+            // A name already saved is not saved twice.
+            repository.addOtherName(minsu, "synthetic minsu (lumen cto)")
+            assertEquals(1, dao.person(minsu)!!.otherNames.size)
+
+            dao.mergePeople(minsu, duplicate, now = 5)
+            assertEquals(
+                listOf("Synthetic Minsu (Lumen CTO)", "Synthetic Minsu", "김민수"),
+                dao.person(minsu)!!.otherNames,
+            )
+            // The duplicate's main name is matched as the main name it was.
+            assertEquals(listOf("Synthetic Minsu"), dao.person(minsu)!!.formerNames)
+
+            // Typed on the person screen, one per line, with the main name and blanks dropped.
+            repository.savePerson(PersonDraft(id = minsu, name = "Synthetic Minsu Kim", aliases = "\n Synthetic Minsu \nSynthetic Minsu Kim\n"))
+            assertEquals(listOf("Synthetic Minsu"), dao.person(minsu)!!.otherNames)
+
+            // Renamed on the person screen: the old name stays, first, as a former name.
+            repository.savePerson(PersonDraft(id = minsu, name = "Synthetic Minsoo Kim", aliases = "Synthetic Minsu"))
+            assertEquals(listOf("Synthetic Minsu Kim", "Synthetic Minsu"), dao.person(minsu)!!.otherNames)
+            assertEquals(listOf("Synthetic Minsu Kim", "Synthetic Minsu"), dao.person(minsu)!!.formerNames)
+        } finally {
+            database.close()
+        }
+    }
+
+    /**
+     * Reports collected on a phone running schema 5 must survive the column
+     * being dropped, or upgrading silently throws away the very thing the
+     * backup is now meant to carry.
+     */
+    @Test
+    fun droppingTheExportedMarkerKeepsExistingReports() {
+        val helper = SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name(TEST_DATABASE)
+            .callback(object : SupportSQLiteOpenHelper.Callback(5) {
+                override fun onCreate(database: SupportSQLiteDatabase) {
+                    database.execSQL(
+                        "CREATE TABLE ai_feedback (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, stage TEXT NOT NULL, " +
+                            "label TEXT NOT NULL, note TEXT NOT NULL, userMessage TEXT NOT NULL, assistantMessage TEXT NOT NULL, " +
+                            "assistantDetail TEXT NOT NULL, appVersion TEXT NOT NULL, createdAt INTEGER NOT NULL, exportedAt INTEGER)",
+                    )
+                    database.execSQL("CREATE INDEX index_ai_feedback_createdAt ON ai_feedback(createdAt)")
+                    database.execSQL("CREATE INDEX index_ai_feedback_exportedAt ON ai_feedback(exportedAt)")
+                    database.execSQL(
+                        "INSERT INTO ai_feedback (stage, label, note, userMessage, assistantMessage, assistantDetail, appVersion, createdAt, exportedAt) " +
+                            "VALUES ('proposal', 'wrong_target', 'synthetic note', 'synthetic message', 'synthetic answer', 'synthetic detail', '0.10.0 (11)', 42, 7)",
+                    )
+                }
+
+                override fun onUpgrade(database: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+            })
+            .build()
+        val opener = FrameworkSQLiteOpenHelperFactory().create(helper)
+        try {
+            NetworkDatabase.MIGRATION_5_6.migrate(opener.writableDatabase)
+            opener.writableDatabase.query("SELECT label, note, appVersion, createdAt FROM ai_feedback").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("wrong_target", cursor.getString(0))
+                assertEquals("synthetic note", cursor.getString(1))
+                assertEquals("0.10.0 (11)", cursor.getString(2))
+                assertEquals(42L, cursor.getLong(3))
+                assertEquals(1, cursor.count)
+            }
+            // The column is gone, not merely ignored.
+            assertThrows(android.database.sqlite.SQLiteException::class.java) {
+                opener.writableDatabase.query("SELECT exportedAt FROM ai_feedback").use { it.moveToFirst() }
+            }
+        } finally {
+            opener.close()
+        }
+    }
+
+    private fun createVersionOneDatabase() {
+        val configuration = SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name(TEST_DATABASE)
+            .callback(object : SupportSQLiteOpenHelper.Callback(1) {
+                override fun onCreate(database: SupportSQLiteDatabase) {
+                    database.execSQL(
+                        "CREATE TABLE people (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name TEXT NOT NULL, organization TEXT NOT NULL, role TEXT NOT NULL, location TEXT NOT NULL, contact TEXT NOT NULL, relationship TEXT NOT NULL, tags TEXT NOT NULL, notes TEXT NOT NULL, isSelf INTEGER NOT NULL, archived INTEGER NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)",
+                    )
+                    database.execSQL(
+                        "CREATE TABLE interactions (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, personId INTEGER NOT NULL, note TEXT NOT NULL, occurredAt INTEGER NOT NULL, createdAt INTEGER NOT NULL, FOREIGN KEY(personId) REFERENCES people(id) ON UPDATE NO ACTION ON DELETE CASCADE)",
+                    )
+                    database.execSQL(
+                        "CREATE TABLE needs (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, personId INTEGER NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, lastConfirmedAt INTEGER NOT NULL, createdAt INTEGER NOT NULL, FOREIGN KEY(personId) REFERENCES people(id) ON UPDATE NO ACTION ON DELETE CASCADE)",
+                    )
+                    database.execSQL(
+                        "CREATE TABLE capabilities (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, personId INTEGER NOT NULL, text TEXT NOT NULL, lastConfirmedAt INTEGER NOT NULL, createdAt INTEGER NOT NULL, FOREIGN KEY(personId) REFERENCES people(id) ON UPDATE NO ACTION ON DELETE CASCADE)",
+                    )
+                    database.execSQL("CREATE INDEX index_people_name ON people(name)")
+                    database.execSQL("CREATE INDEX index_people_updatedAt ON people(updatedAt)")
+                    database.execSQL("CREATE INDEX index_interactions_personId ON interactions(personId)")
+                    database.execSQL("CREATE INDEX index_interactions_occurredAt ON interactions(occurredAt)")
+                    database.execSQL("CREATE INDEX index_needs_personId ON needs(personId)")
+                    database.execSQL("CREATE INDEX index_needs_status ON needs(status)")
+                    database.execSQL("CREATE INDEX index_capabilities_personId ON capabilities(personId)")
+                    database.execSQL("CREATE INDEX index_capabilities_lastConfirmedAt ON capabilities(lastConfirmedAt)")
+                    database.execSQL("INSERT INTO people VALUES (1, 'Legacy Person', 'Legacy Corp', 'Legacy role', '', '', '', '', '', 0, 0, 1, 2)")
+                    database.execSQL("INSERT INTO interactions VALUES (2, 1, 'Legacy interaction', 3, 4)")
+                    database.execSQL("INSERT INTO needs VALUES (3, 1, 'Legacy need', 'active', 5, 6)")
+                    database.execSQL("INSERT INTO capabilities VALUES (4, 1, 'Legacy capability', 7, 8)")
+                }
+
+                override fun onUpgrade(database: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+            })
+            .build()
+        FrameworkSQLiteOpenHelperFactory().create(configuration).use { helper -> helper.writableDatabase }
+    }
+
+    companion object {
+        private const val TEST_DATABASE = "network-migration-test.db"
+    }
+}
