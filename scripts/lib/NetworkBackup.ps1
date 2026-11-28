@@ -1,6 +1,6 @@
-# Reading People's encrypted GitHub backup on this machine (Notes' People since 2.5,
-# Network App's before), shared by read-feedback.ps1 and network-lookup.ps1.
-# queue-draft.ps1 uses its check of the data repository and Resolve-PeopleBackupPath.
+# Reading Network App's encrypted GitHub backup on this machine, for network-lookup.ps1
+# until the user moves to Notes (2.5), whose People keeps readable files in the notes
+# repo instead (PeopleFiles.ps1). queue-draft.ps1 uses its check of a repository.
 # Dot-source it.
 #
 # The backup is decrypted in memory only. The passphrase is typed by the owner
@@ -26,35 +26,13 @@ function Assert-NetworkDataRepository {
     }
 }
 
-function Resolve-PeopleBackupPath {
-    <#
-    Notes' People backup file once Notes has made one, else Network App's, which is the
-    one to read until the move to Notes (2.5). With -ForInbox it goes by the inbox key
-    instead, since drafts must go where the phone's key is.
-    #>
-    param(
-        [Parameter(Mandatory)][string]$Owner,
-        [Parameter(Mandatory)][string]$Repo,
-        [Parameter(Mandatory)][string]$Branch,
-        [switch]$ForInbox
-    )
-    $notesFile = 'people-backup.enc.json'
-    $probe = if ($ForInbox) { 'people-backup-inbox/key.json' } else { $notesFile }
-    gh api "repos/$Owner/$Repo/contents/${probe}?ref=$Branch" --silent 2>$null
-    if ($LASTEXITCODE -eq 0) { return $notesFile }
-    $what = if ($ForInbox) { 'inbox key' } else { 'backup' }
-    Write-Host "==> Notes has no People $what yet, so this uses Network App's" -ForegroundColor DarkGray
-    'network-backup.enc.json'
-}
-
 function Get-NetworkBackupEnvelope {
     <# Fetches the encrypted backup, or reads -EnvelopeFile, and checks its format. #>
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
         [Parameter(Mandatory)][string]$Branch,
-        # Left out: Notes' People backup once it exists, else Network App's.
-        [string]$Path,
+        [Parameter(Mandatory)][string]$Path,
         # Decrypt an envelope already on this machine instead of fetching one.
         [string]$EnvelopeFile
     )
@@ -64,7 +42,6 @@ function Get-NetworkBackupEnvelope {
         $text = Get-Content -LiteralPath $EnvelopeFile -Raw
     } else {
         Assert-NetworkDataRepository -Owner $Owner -Repo $Repo
-        if (-not $Path) { $Path = Resolve-PeopleBackupPath -Owner $Owner -Repo $Repo -Branch $Branch }
 
         Write-Host "==> Fetching $Path from $Owner/$Repo@$Branch" -ForegroundColor Cyan
         # Must be requested raw. Decoding the base64 .content through a PowerShell
@@ -112,7 +89,7 @@ function New-PassphraseWindow([string]$Purpose) {
     [System.Windows.Forms.Application]::EnableVisualStyles()
     $width = 460
     $form = [System.Windows.Forms.Form]@{
-        Text            = 'People backup'
+        Text            = 'Network App backup'
         StartPosition   = 'CenterScreen'
         TopMost         = $true
         FormBorderStyle = 'FixedDialog'

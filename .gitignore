@@ -26,5 +26,3 @@ keystore.properties
 # Speech engine AAR, downloaded by app/build.gradle.kts
 /app/libs/
 
-# People's assistant reports, decrypted on the PC by scripts/read-feedback.ps1
-/assistant-feedback.json

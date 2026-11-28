@@ -46,14 +46,6 @@ class CheckinSettings(context: Context) {
         preferences.edit().putBoolean(KEY_CHATS, enabled).apply()
     }
 
-    /** How many check-in answers Network App handed over when the user moved (Notes 2.5); null before. */
-    val networkAppHandover: Int?
-        get() = if (preferences.contains(KEY_HANDOVER)) preferences.getInt(KEY_HANDOVER, 0) else null
-
-    fun markNetworkAppHandover(count: Int) {
-        preferences.edit().putInt(KEY_HANDOVER, count).commit()
-    }
-
     companion object {
         const val DEFAULT_EVENING_MINUTES = 21 * 60
         const val MINUTES_PER_DAY = 24 * 60
@@ -63,6 +55,5 @@ class CheckinSettings(context: Context) {
         private const val KEY_EVENING_MINUTES = "evening_minutes"
         private const val KEY_CONTACTS = "contacts_enabled"
         private const val KEY_CHATS = "chats_enabled"
-        private const val KEY_HANDOVER = "network_app_handover"
     }
 }

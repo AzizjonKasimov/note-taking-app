@@ -64,10 +64,10 @@
             </intent-filter>
         </activity>
 
-        <!-- Takes the check-in's answers from Network App once, app to app (CheckinHandover). It checks
-             that the caller is Network App signed with its own key, so it is exported without a filter. -->
+        <!-- Takes Network App's people and check-in answers once, app to app (MoveFromNetworkApp). It
+             checks that the caller is Network App signed with its own key, so it is exported without a filter. -->
         <activity
-            android:name=".people.checkin.CheckinHandoverActivity"
+            android:name=".people.move.MoveFromNetworkAppActivity"
             android:exported="true"
             android:excludeFromRecents="true"
             android:noHistory="true"

@@ -23,9 +23,6 @@ import com.azizjon.notes.people.ai.PendingItem
 import com.azizjon.notes.people.ai.PhotoException
 import com.azizjon.notes.people.ai.PhotoLimits
 import com.azizjon.notes.people.ai.PhotoPreparer
-import com.azizjon.notes.people.backup.BackupStatus
-import com.azizjon.notes.people.backup.GitHubBackupConfig
-import com.azizjon.notes.people.backup.GitHubBackupSettings
 import com.azizjon.notes.people.checkin.ChatSources
 import com.azizjon.notes.people.checkin.CheckinEntity
 import com.azizjon.notes.people.checkin.CheckinList
@@ -47,9 +44,9 @@ import com.azizjon.notes.people.data.UndoConflictException
 import com.azizjon.notes.people.feedback.AiFeedbackLabel
 import com.azizjon.notes.people.feedback.buildFeedback
 import com.azizjon.notes.people.feedback.installedAppVersion
-import com.azizjon.notes.people.inbox.InboxCheck
-import com.azizjon.notes.people.inbox.InboxDraft
-import com.azizjon.notes.people.inbox.InboxState
+import com.azizjon.notes.people.life.InboxDraft
+import com.azizjon.notes.people.life.PeopleRemovalException
+import com.azizjon.notes.people.life.SaveStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,51 +56,43 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-data class BackupUiState(
-    val config: GitHubBackupConfig,
-    val status: BackupStatus,
+data class SaveUiState(
+    val status: SaveStatus,
+    /** Whether this build saves People to the notes repo: always, but a test build only once switched on. */
+    val owns: Boolean,
+    /** How many people's files the notes repo holds, once looked at. */
+    val folderPeople: Int? = null,
     val busy: Boolean = false,
+    /** How many people's files the last save would have removed, when it was held back for that; 0 otherwise. */
+    val removalsWaiting: Int = 0,
 )
 
 data class FeedbackUiState(val reports: List<AiFeedbackEntity> = emptyList())
-
-/** Bringing Network App's people into Notes, done once (Notes 2.5). */
-sealed interface NetworkAppMove {
-    data object NotChecked : NetworkAppMove
-
-    /** Network App's backup opened with the saved passphrase, and holds this much. */
-    data class Checked(val people: Int, val notes: Int, val reports: Int) : NetworkAppMove
-
-    /** Its people are in Notes, and Notes' own first backup is saved and opens. */
-    data class Done(val people: Int) : NetworkAppMove
-}
 
 class NetworkViewModel(application: Application) : AndroidViewModel(application) {
     private val app = (application as NotesApplication).people
     private val context: Application = application
     private val repository = app.repository
-    private val settings = app.backupSettings
-    private val backupManager = app.backupManager
+    private val saveStore = app.saveState
+    private val peopleInLife = app.peopleInLife
     private val gatewaySettings = app.gatewaySettings
     private val assistantStore = app.assistantStore
     private val captureDraftStore = app.captureDraftStore
-    private val pcInbox = app.pcInbox
     private val agent = AssistantAgent(
         client = app.agentClient,
         tools = AssistantTools(
             store = assistantStore,
             // Marked before the write rather than after the turn, so a process
-            // killed mid-turn still leaves the backup flagged as due.
-            beforeWrite = { settings.markBackupNeeded() },
+            // killed mid-turn still leaves the save to the notes repo due.
+            beforeWrite = { saveStore.markSaveNeeded() },
         ),
     )
 
@@ -113,18 +102,21 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         NetworkSnapshot(),
     )
 
-    private val _backupState = MutableStateFlow(BackupUiState(settings.config, settings.status))
-    val backupState: StateFlow<BackupUiState> = _backupState.asStateFlow()
-    private val _networkAppMove = MutableStateFlow<NetworkAppMove>(NetworkAppMove.NotChecked)
-    val networkAppMove: StateFlow<NetworkAppMove> = _networkAppMove.asStateFlow()
+    private val _saveState = MutableStateFlow(SaveUiState(saveStore.status, peopleInLife.owns))
+    val saveState: StateFlow<SaveUiState> = _saveState.asStateFlow()
 
-    /** The check-in answers Network App handed over, or null until it has ("Move to Notes" there). */
-    private val _networkAppHandover = MutableStateFlow(app.checkinSettings.networkAppHandover)
-    val networkAppHandover: StateFlow<Int?> = _networkAppHandover.asStateFlow()
+    /** How many people came over from Network App on the phone, or null until "Move to Notes" there. */
+    private val _movedFromNetworkApp = MutableStateFlow(saveStore.movedFromNetworkApp)
+    val movedFromNetworkApp: StateFlow<Int?> = _movedFromNetworkApp.asStateFlow()
 
-    /** The hand-over happens in another screen of the app, so the activity asks again on coming back. */
-    fun refreshNetworkAppHandover() {
-        _networkAppHandover.value = app.checkinSettings.networkAppHandover
+    /**
+     * The move from Network App happens in a screen of its own, so the activity asks again on
+     * coming back, and a save the move left due starts then.
+     */
+    fun refreshAfterMove() {
+        _movedFromNetworkApp.value = saveStore.movedFromNetworkApp
+        refreshSaveState()
+        if (saveStore.status.saveNeeded) scheduleSave()
     }
 
     private val _message = MutableStateFlow<String?>(null)
@@ -163,28 +155,9 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
     private val _requestedSection = MutableStateFlow<AppSection?>(null)
     val requestedSection: StateFlow<AppSection?> = _requestedSection.asStateFlow()
 
-    /** Whether drafts from the PC are on, with their key and last check, for Settings. */
-    val inboxState: StateFlow<InboxState> = pcInbox.state
-
-    /** True while the inbox is being turned on or off, or checked. */
-    private val _inboxBusy = MutableStateFlow(false)
-    val inboxBusy: StateFlow<Boolean> = _inboxBusy.asStateFlow()
-
-    /** Drafts just sent, edited, or discarded, hidden while they are removed from the store. */
-    private val _inboxHidden = MutableStateFlow<Set<String>>(emptySet())
-
-    /** Drafts from the PC waiting on the Assistant tab, oldest first. */
-    val inboxDrafts: StateFlow<List<InboxDraft>> = combine(pcInbox.state, _inboxHidden) { state, hidden ->
-        state.pending.filterNot { it.id in hidden }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-
-    /**
-     * One GitHub call at a time from this phone: the backup and the inbox both
-     * commit to the data repository, and two commits racing on one branch can
-     * fail with a conflict.
-     */
-    private val githubLock = Mutex()
-    private var lastInboxCheckAt = 0L
+    /** Drafts a session on the PC left in the notes repo (`people/drafts/`), oldest first. */
+    private val _inboxDrafts = MutableStateFlow<List<InboxDraft>>(emptyList())
+    val inboxDrafts: StateFlow<List<InboxDraft>> = _inboxDrafts.asStateFlow()
 
     private val photoPreparer = PhotoPreparer(context)
     private var nextPhotoId = 1L
@@ -213,13 +186,13 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CheckinList())
 
-    private var backupJob: Job? = null
+    private var saveJob: Job? = null
     private var chatJob: Job? = null
     private var draftSaveJob: Job? = null
     private var nextMessageId = 1L
 
     init {
-        if (settings.status.backupNeeded) scheduleAutoBackup()
+        if (saveStore.status.saveNeeded) scheduleSave()
         refreshCheckinSources()
         viewModelScope.launch {
             val restored = withContext(Dispatchers.IO) {
@@ -228,7 +201,14 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
             // Never clobber something typed while the encrypted read was running.
             if (restored.isNotBlank() && _composerDraft.value.isBlank()) _composerDraft.value = restored
         }
-        viewModelScope.launch(Dispatchers.IO) { runCatching { pcInbox.load() } }
+        // Drafts from the PC and people's files arrive with a sync of the notes repo, or with its
+        // first download on a new phone, where an empty People offers to load them.
+        viewModelScope.launch {
+            app.life.sync.map { it.lastSyncAt }.distinctUntilChanged().collect {
+                checkInbox()
+                refreshFolderPeople()
+            }
+        }
     }
 
     fun showMessage(value: String) {
@@ -368,65 +348,10 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
      * most every [INBOX_CHECK_INTERVAL_MS]; a failure is kept for Settings to
      * show rather than interrupting whatever the app was opened for.
      */
-    fun checkInbox(fromSettings: Boolean = false) {
-        val now = System.currentTimeMillis()
-        if (_inboxBusy.value || (!fromSettings && now - lastInboxCheckAt < INBOX_CHECK_INTERVAL_MS)) return
-        lastInboxCheckAt = now
+    /** Reads the drafts waiting in the notes repo: a look at the phone's copy, so any screen may ask. */
+    fun checkInbox() {
         viewModelScope.launch {
-            val enabled = withContext(Dispatchers.IO) { runCatching { pcInbox.load().enabled }.getOrDefault(false) }
-            if (!enabled) return@launch
-            _inboxBusy.value = true
-            try {
-                val result = githubLock.withLock { withContext(Dispatchers.IO) { pcInbox.check(settings.config) } }
-                val report = inboxReport(result)
-                when {
-                    report != null -> showMessage(report)
-                    fromSettings && result.taken == 0 -> showMessage("No new drafts from your PC")
-                    fromSettings -> showMessage("${result.taken} new draft(s) from your PC on the Assistant tab")
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                if (fromSettings) showMessage(error.message ?: "Could not check for drafts from your PC")
-            } finally {
-                _inboxBusy.value = false
-            }
-        }
-    }
-
-    /** Turns drafts from the PC on or off, which publishes or removes this phone's key. */
-    fun setInboxEnabled(enabled: Boolean) {
-        if (_inboxBusy.value) return
-        viewModelScope.launch {
-            _inboxBusy.value = true
-            try {
-                githubLock.withLock {
-                    withContext(Dispatchers.IO) {
-                        val config = settings.config
-                        if (enabled) pcInbox.enable(config) else pcInbox.disable(config)
-                    }
-                }
-                showMessage(
-                    if (enabled) {
-                        "Drafts from your PC are on. This phone's key is ${pcInbox.state.value.key?.fingerprint}."
-                    } else {
-                        "Drafts from your PC are off"
-                    },
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                val reason = error.message ?: "GitHub could not be reached"
-                showMessage(
-                    if (enabled) {
-                        "Could not turn on drafts from your PC: $reason"
-                    } else {
-                        "Turned off on this phone, but the inbox could not be cleared from GitHub: $reason"
-                    },
-                )
-            } finally {
-                _inboxBusy.value = false
-            }
+            _inboxDrafts.value = runCatching { peopleInLife.drafts() }.getOrDefault(emptyList())
         }
     }
 
@@ -465,33 +390,10 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         if (inboxDrafts.value.any { it.id == id }) removeInboxDraft(id)
     }
 
-    /** Hides the draft at once, so a second tap cannot use it twice, while the store forgets it. */
+    /** Hides the draft at once, so a second tap cannot use it twice, then removes its file from the notes repo. */
     private fun removeInboxDraft(id: String) {
-        _inboxHidden.value += id
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { runCatching { pcInbox.take(id) } }
-            _inboxHidden.value -= id
-        }
-    }
-
-    /** What the user should hear about a look at the inbox, beyond the drafts on the card. */
-    private fun inboxReport(result: InboxCheck): String? {
-        val parts = buildList {
-            if (result.keyRestored) {
-                add("This phone's inbox key was missing from the data repository or had been replaced, so the app put it back.")
-            }
-            if (result.removed.isNotEmpty()) {
-                val reasons = result.removed.distinct().joinToString("; ")
-                add(
-                    if (result.removed.size == 1) {
-                        "A draft from your PC could not be opened and was deleted: $reasons."
-                    } else {
-                        "${result.removed.size} drafts from your PC could not be opened and were deleted: $reasons."
-                    },
-                )
-            }
-        }
-        return parts.takeIf { it.isNotEmpty() }?.joinToString(" ")
+        _inboxDrafts.value = _inboxDrafts.value.filterNot { it.id == id }
+        viewModelScope.launch { runCatching { peopleInLife.takeDraft(id) } }
     }
 
     fun openSection(section: AppSection) {
@@ -572,7 +474,7 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Record answers change the network, so they go through mutate() and the backup marker.
+    // Record answers change the network, so they go through mutate() and the save marker.
     fun confirmNeedStillOpen(item: NeedEntity) = mutate { repository.confirmNeed(item) }
 
     fun closeNeedFromCheckin(item: NeedEntity) = mutate {
@@ -664,8 +566,8 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
                 }
                 val log = outcome.log
                 if (log.changes.isNotEmpty()) {
-                    refreshBackupState()
-                    scheduleAutoBackup()
+                    refreshSaveState()
+                    scheduleSave()
                 }
                 val attachment = if (log.saved.isEmpty() && log.pending.isEmpty()) {
                     null
@@ -721,13 +623,13 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         chatJob?.cancel()
         chatJob = viewModelScope.launch {
             setPhase(ChatPhase.Undoing)
-            settings.markBackupNeeded()
-            refreshBackupState()
+            saveStore.markSaveNeeded()
+            refreshSaveState()
             try {
                 assistantStore.undo(result.changes, System.currentTimeMillis())
                 updateAgentResult(messageId) { it.copy(undone = true) }
                 appendAssistant("Undone. Everything that reply saved is back the way it was.")
-                scheduleAutoBackup()
+                scheduleSave()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (conflict: UndoConflictException) {
@@ -747,8 +649,8 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         chatJob?.cancel()
         chatJob = viewModelScope.launch {
             setPhase(ChatPhase.Confirming)
-            settings.markBackupNeeded()
-            refreshBackupState()
+            saveStore.markSaveNeeded()
+            refreshSaveState()
             try {
                 val outcome = when (val action = item.action) {
                     is PendingAction.DeletePerson -> "Deleted ${assistantStore.deletePerson(action.personId)}."
@@ -758,7 +660,7 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
                         .let { "Merged ${it.mergedName} into ${it.keptName}." }
                 }
                 setActionState(messageId, actionId, ActionState.DONE, outcome)
-                scheduleAutoBackup()
+                scheduleSave()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -799,7 +701,7 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
      * Stores the report, copying the response into it as it goes.
      *
      * Nothing is sent as the report is saved. It sits in the local database and
-     * leaves only inside the next encrypted backup, which the user starts.
+     * leaves the phone only with the people's files in the notes repo.
      */
     fun submitFeedback(label: AiFeedbackLabel, note: String) {
         val message = _feedbackTarget.value ?: return
@@ -816,7 +718,7 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
                     ),
                 )
                 updateMessage(message.id) { it.copy(reportedLabel = label.id) }
-                showMessage("Reported. It travels with your next encrypted backup.")
+                showMessage("Reported. It is saved with your people in your notes repo.")
             } catch (error: Exception) {
                 showMessage(error.message ?: "Could not save the report")
             }
@@ -827,9 +729,9 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 repository.deleteFeedback(id)
-                settings.markBackupNeeded()
-                refreshBackupState()
-                scheduleAutoBackup()
+                saveStore.markSaveNeeded()
+                refreshSaveState()
+                scheduleSave()
             } catch (error: Exception) {
                 showMessage(error.message ?: "Could not delete the report")
             }
@@ -840,10 +742,10 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 repository.clearFeedback()
-                // Deleting reports changes what the next backup should contain.
-                settings.markBackupNeeded()
-                refreshBackupState()
-                scheduleAutoBackup()
+                // Deleting reports changes what the next save should write.
+                saveStore.markSaveNeeded()
+                refreshSaveState()
+                scheduleSave()
                 showMessage("All assistant reports deleted")
             } catch (error: Exception) {
                 showMessage(error.message ?: "Could not delete the reports")
@@ -857,156 +759,52 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
         showMessage("Assistant permission revoked")
     }
 
-    fun saveBackupConfig(config: GitHubBackupConfig) {
-        settings.save(config)
-        refreshBackupState()
-        showMessage("Backup settings saved")
-        if (config.autoBackup && settings.status.backupNeeded) scheduleAutoBackup()
+    fun saveNow() {
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch { performSave(showSuccess = true) }
     }
 
-    fun backupNow() {
-        backupJob?.cancel()
-        backupJob = viewModelScope.launch { performBackup(showSuccess = true) }
+    /** The save held back because it removes many people's files, once the user confirmed that they are gone. */
+    fun saveRemovingPeople() {
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch { performSave(showSuccess = true, allowRemovals = true) }
     }
 
-    /**
-     * Checks that the saved passphrase opens the stored backup, changing nothing.
-     *
-     * Deliberately separate from Restore. The question "can I still get my data
-     * back" should be answerable without the destructive action that answers it
-     * by accident, and a passphrase that has drifted out of sync stays invisible
-     * until then.
-     */
-    fun verifyBackup() {
-        if (_backupState.value.busy) return
-        viewModelScope.launch {
-            val config = settings.config
-            if (!config.configured) {
-                showMessage("Complete and save the GitHub backup settings first")
-                return@launch
-            }
-            setBackupBusy(true)
-            try {
-                val check = githubLock.withLock { backupManager.verify(config) }
-                val reports = if (check.feedback == 0) "" else ", ${check.feedback} report(s)"
-                showMessage(
-                    "Passphrase opens the stored backup: ${check.people} people, " +
-                        "${check.interactions} notes$reports",
-                )
-            } catch (e: Exception) {
-                // Left off the backup status on purpose: nothing was attempted,
-                // so a failed check must not make a good backup look broken.
-                showMessage(e.message ?: "The stored backup could not be checked")
-            } finally {
-                setBackupBusy(false)
-            }
-        }
+    /** For test builds: whether this one writes the notes repo's people folder and takes its drafts. */
+    fun setTestBuildOwnsFolder(owns: Boolean) {
+        saveStore.testBuildOwnsFolder = owns
+        refreshSaveState()
+        refreshFolderPeople()
+        checkInbox()
     }
 
-    fun restoreFromGitHub(onRestored: () -> Unit = {}) {
-        if (_backupState.value.busy) return
-        viewModelScope.launch {
-            val config = settings.config
-            if (!config.configured) {
-                showMessage("Complete and save the GitHub backup settings first")
-                return@launch
-            }
-            setBackupBusy(true)
-            settings.markAttemptStarted()
-            refreshBackupState()
-            try {
-                val restored = githubLock.withLock { backupManager.download(config) }
-                settings.markBackupNeeded()
-                repository.replaceAll(restored.snapshot, restored.feedback)
-                settings.markBackedUp()
-                refreshBackupState()
-                // Undo records point at rows the restore just replaced.
-                startNewChat()
-                showMessage("Restored ${restored.snapshot.people.size} people from encrypted backup")
-                onRestored()
-            } catch (e: Exception) {
-                val safeMessage = e.message ?: "Restore failed"
-                settings.markFailed(safeMessage)
-                refreshBackupState()
-                showMessage(safeMessage)
-            } finally {
-                setBackupBusy(false)
-            }
-        }
-    }
-
-    /**
-     * Network App's backup: the same private repository, token, and passphrase as Notes' own backup,
-     * but Network App's file. Null, with a message, until the settings allow reading it.
-     */
-    private fun networkAppConfig(): GitHubBackupConfig? {
-        val config = settings.config
-        if (!config.configured) {
-            showMessage("Save the backup settings first: the GitHub token and Network App's passphrase")
-            return null
-        }
-        if (config.path == GitHubBackupSettings.NETWORK_APP_PATH) {
-            // Notes writing there would replace Network App's backup.
-            showMessage("Change the backup path first: ${config.path} is Network App's own file")
-            return null
-        }
-        return config.copy(path = GitHubBackupSettings.NETWORK_APP_PATH)
-    }
-
-    /** Opens Network App's backup with the saved passphrase and says what it holds; changes nothing. */
-    fun checkNetworkAppBackup() {
-        if (_backupState.value.busy) return
-        val config = networkAppConfig() ?: return
-        viewModelScope.launch {
-            setBackupBusy(true)
-            try {
-                val check = githubLock.withLock { backupManager.verify(config) }
-                _networkAppMove.value = NetworkAppMove.Checked(check.people, check.interactions, check.feedback)
-            } catch (e: Exception) {
-                showMessage(e.message ?: "Network App's backup could not be read")
-            } finally {
-                setBackupBusy(false)
-            }
-        }
-    }
-
-    /**
-     * Puts Network App's people into Notes, then saves Notes' own first backup to its own file and
-     * checks that it opens. Never runs once Notes has people, so it cannot replace edits made here.
-     */
-    fun bringPeopleFromNetworkApp() {
-        if (_backupState.value.busy || _networkAppMove.value !is NetworkAppMove.Checked) return
-        val from = networkAppConfig() ?: return
+    /** Fills an empty People from the files in the notes repo, as on a new phone. */
+    fun loadFromLife() {
+        if (_saveState.value.busy) return
         viewModelScope.launch {
             if (repository.snapshot().people.isNotEmpty()) {
-                showMessage("Notes already has people, so nothing was brought in")
+                showMessage("People already has people, so nothing was loaded")
                 return@launch
             }
-            setBackupBusy(true)
-            settings.markAttemptStarted()
-            refreshBackupState()
+            setSaveBusy(true)
             try {
-                val restored = githubLock.withLock { backupManager.download(from) }
-                settings.markBackupNeeded()
-                repository.replaceAll(restored.snapshot, restored.feedback)
-                val config = settings.config
-                githubLock.withLock {
-                    backupManager.backup(config)
-                    backupManager.verify(config)
-                }
-                refreshBackupState()
+                val loaded = peopleInLife.load()
+                repository.replaceAll(loaded.snapshot, loaded.feedback)
                 // Undo records would point at rows that were just replaced.
                 startNewChat()
-                _networkAppMove.value = NetworkAppMove.Done(restored.snapshot.people.size)
-                showMessage("${restored.snapshot.people.size} people are in Notes now, and Notes' own backup is saved")
+                showMessage("Loaded ${loaded.snapshot.people.size} people from your notes repo")
             } catch (e: Exception) {
-                val safeMessage = e.message ?: "Bringing the people in failed"
-                settings.markFailed(safeMessage)
-                refreshBackupState()
-                showMessage(safeMessage)
+                showMessage(e.message ?: "Could not load people from your notes repo")
             } finally {
-                setBackupBusy(false)
+                setSaveBusy(false)
             }
+        }
+    }
+
+    private fun refreshFolderPeople() {
+        viewModelScope.launch {
+            val count = runCatching { peopleInLife.folderPeople() }.getOrNull()
+            _saveState.value = _saveState.value.copy(folderPeople = count)
         }
     }
 
@@ -1078,60 +876,56 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
 
     private fun mutate(block: suspend () -> Unit) {
         viewModelScope.launch {
-            settings.markBackupNeeded()
-            refreshBackupState()
+            saveStore.markSaveNeeded()
+            refreshSaveState()
             try {
                 block()
-                scheduleAutoBackup()
+                scheduleSave()
             } catch (e: Exception) {
                 showMessage(e.message ?: "Could not save the change")
             }
         }
     }
 
-    private fun scheduleAutoBackup() {
-        val config = settings.config
-        if (!config.autoBackup || !config.configured) return
-        backupJob?.cancel()
-        backupJob = viewModelScope.launch {
-            delay(AUTO_BACKUP_DELAY_MS)
-            performBackup(showSuccess = false)
+    /** Saves to the notes repo shortly after a change, so a burst of changes is one commit. */
+    private fun scheduleSave() {
+        if (!peopleInLife.owns) return
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch {
+            delay(SAVE_DELAY_MS)
+            performSave(showSuccess = false)
         }
     }
 
-    private suspend fun performBackup(showSuccess: Boolean) {
-        if (_backupState.value.busy) return
-        val config = settings.config
-        if (!config.configured) {
-            if (showSuccess) showMessage("Complete and save the GitHub backup settings first")
-            return
-        }
-        setBackupBusy(true)
-        settings.markAttemptStarted()
-        refreshBackupState()
+    private suspend fun performSave(showSuccess: Boolean, allowRemovals: Boolean = false) {
+        if (_saveState.value.busy) return
+        setSaveBusy(true)
+        saveStore.markAttemptStarted()
+        refreshSaveState()
         try {
-            val result = githubLock.withLock { backupManager.backup(config) }
-            refreshBackupState()
-            if (showSuccess) {
-                val reports = if (result.feedback == 0) "" else " and ${result.feedback} assistant report(s)"
-                showMessage("Encrypted backup saved for ${result.people} people$reports")
-            }
+            val people = peopleInLife.save(allowRemovals)
+            saveStore.markSaved()
+            _saveState.value = _saveState.value.copy(removalsWaiting = 0)
+            refreshSaveState()
+            refreshFolderPeople()
+            if (showSuccess) showMessage("Saved $people people to your notes repo")
         } catch (e: Exception) {
-            val safeMessage = e.message ?: "GitHub backup failed"
-            settings.markFailed(safeMessage)
-            refreshBackupState()
-            showMessage(safeMessage)
+            val safeMessage = e.message ?: "Saving to your notes repo failed"
+            saveStore.markFailed(safeMessage)
+            _saveState.value = _saveState.value.copy(removalsWaiting = (e as? PeopleRemovalException)?.removing ?: 0)
+            refreshSaveState()
+            if (showSuccess) showMessage(safeMessage)
         } finally {
-            setBackupBusy(false)
+            setSaveBusy(false)
         }
     }
 
-    private fun setBackupBusy(busy: Boolean) {
-        _backupState.value = _backupState.value.copy(busy = busy)
+    private fun setSaveBusy(busy: Boolean) {
+        _saveState.value = _saveState.value.copy(busy = busy)
     }
 
-    private fun refreshBackupState() {
-        _backupState.value = _backupState.value.copy(config = settings.config, status = settings.status)
+    private fun refreshSaveState() {
+        _saveState.value = _saveState.value.copy(status = saveStore.status, owns = peopleInLife.owns)
     }
 
     /**
@@ -1160,9 +954,8 @@ class NetworkViewModel(application: Application) : AndroidViewModel(application)
     }
 
     companion object {
-        private const val AUTO_BACKUP_DELAY_MS = 1_500L
+        private const val SAVE_DELAY_MS = 1_500L
         private const val DRAFT_SAVE_DELAY_MS = 400L
-        private const val INBOX_CHECK_INTERVAL_MS = 15_000L
         private const val UNREADABLE_PHOTO = "That photo could not be opened."
         private const val CHECKIN_REFRESH_MS = 60 * 60 * 1000L
     }

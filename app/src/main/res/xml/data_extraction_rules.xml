@@ -13,10 +13,8 @@
         <exclude domain="database" path="people.db-wal" />
         <exclude domain="database" path="people.db-shm" />
         <exclude domain="database" path="people.db-journal" />
-        <exclude domain="sharedpref" path="people_backup.xml" />
-        <exclude domain="sharedpref" path="people_backup_secrets.xml" />
+        <exclude domain="sharedpref" path="people_save.xml" />
         <exclude domain="sharedpref" path="people_capture_draft.xml" />
-        <exclude domain="sharedpref" path="people_pc_inbox.xml" />
         <exclude domain="sharedpref" path="people_checkin_settings.xml" />
         <exclude domain="sharedpref" path="people_assistant.xml" />
     </cloud-backup>
@@ -32,10 +30,8 @@
         <exclude domain="database" path="people.db-wal" />
         <exclude domain="database" path="people.db-shm" />
         <exclude domain="database" path="people.db-journal" />
-        <exclude domain="sharedpref" path="people_backup.xml" />
-        <exclude domain="sharedpref" path="people_backup_secrets.xml" />
+        <exclude domain="sharedpref" path="people_save.xml" />
         <exclude domain="sharedpref" path="people_capture_draft.xml" />
-        <exclude domain="sharedpref" path="people_pc_inbox.xml" />
         <exclude domain="sharedpref" path="people_checkin_settings.xml" />
         <exclude domain="sharedpref" path="people_assistant.xml" />
     </device-transfer>

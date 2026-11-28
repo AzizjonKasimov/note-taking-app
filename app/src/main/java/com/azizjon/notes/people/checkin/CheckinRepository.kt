@@ -25,7 +25,8 @@ class CheckinRepository(
     suspend fun all(): List<CheckinEntity> = dao.all()
 
     /**
-     * Network App's answers, handed over once on the phone ([CheckinHandover]). They replace the rows
+     * Network App's answers, handed over once on the phone when it moves into Notes
+     * ([com.azizjon.notes.people.move.MoveFromNetworkApp]). They replace the rows
      * Notes made for the same contacts and chats, since they carry what the user answered.
      */
     suspend fun takeHandover(rows: List<CheckinEntity>) = dao.upsert(rows)

@@ -44,8 +44,8 @@ class NotesApplication : Application() {
     /** The AI gateway's key, which the user enters in Settings. */
     val gatewayKey: TokenStore by lazy { TokenStore(this, TokenStore.GATEWAY_PREFS_NAME, TokenStore.GATEWAY_KEY_ALIAS) }
 
-    /** People (Network App until 2.5): its records, check-in, backup, PC drafts, and assistant. */
-    val people: PeopleModule by lazy { PeopleModule(this) { gatewayKey.read() } }
+    /** People (Network App until 2.5): its records, check-in, copy in the notes repo, PC drafts, and assistant. */
+    val people: PeopleModule by lazy { PeopleModule(this, life) { gatewayKey.read() } }
 
     /** The "tell me anything" box on Today: the assistant's conversation since the app started. */
     val assistant: AssistantSession by lazy {
@@ -83,6 +83,11 @@ class NotesApplication : Application() {
         // The app's old GitHub backup of its own notes is gone, and so is the token it kept for it.
         deleteSharedPreferences("github_backup_secrets")
         deleteSharedPreferences("github_backup")
+        // So is People's encrypted backup and PC inbox, which only test builds of 2026-11-27 had,
+        // with a GitHub token, a passphrase, and the inbox's private key.
+        deleteSharedPreferences("people_backup_secrets")
+        deleteSharedPreferences("people_backup")
+        deleteSharedPreferences("people_pc_inbox")
         if (life.isCloned()) SyncWorker.schedulePeriodic(this)
         // Re-creates People's evening check-in if its schedule was ever lost; leaves a live one alone.
         EveningCheckin.schedule(this, people.checkinSettings.state, replace = false)

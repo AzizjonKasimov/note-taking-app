@@ -52,7 +52,7 @@ fun PeopleApp(
     onOpenAppSettings: () -> Unit,
 ) {
     val snapshot by viewModel.snapshot.collectAsStateWithLifecycle()
-    val backupState by viewModel.backupState.collectAsStateWithLifecycle()
+    val saveState by viewModel.saveState.collectAsStateWithLifecycle()
     val chat by viewModel.chat.collectAsStateWithLifecycle()
     val composerDraft by viewModel.composerDraft.collectAsStateWithLifecycle()
     val photos by viewModel.photos.collectAsStateWithLifecycle()
@@ -66,11 +66,8 @@ fun PeopleApp(
     val checkinSettings by viewModel.checkinSettings.collectAsStateWithLifecycle()
     val requestedSection by viewModel.requestedSection.collectAsStateWithLifecycle()
     val inboxDrafts by viewModel.inboxDrafts.collectAsStateWithLifecycle()
-    val inboxState by viewModel.inboxState.collectAsStateWithLifecycle()
-    val inboxBusy by viewModel.inboxBusy.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
-    val networkAppMove by viewModel.networkAppMove.collectAsStateWithLifecycle()
-    val networkAppHandover by viewModel.networkAppHandover.collectAsStateWithLifecycle()
+    val movedFromNetworkApp by viewModel.movedFromNetworkApp.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var section by rememberSaveable { mutableStateOf(AppSection.CHAT) }
     var selectedPersonId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -226,26 +223,19 @@ fun PeopleApp(
                             onSetActive = viewModel::setNeedActive,
                         )
                         AppSection.SETTINGS -> SettingsScreen(
-                            backupState = backupState,
+                            saveState = saveState,
                             gatewaySettingsState = gatewaySettingsState,
                             feedbackState = feedbackState,
-                            inboxState = inboxState,
-                            inboxBusy = inboxBusy,
                             peopleCount = snapshot.people.size,
-                            networkAppMove = networkAppMove,
-                            networkAppHandover = networkAppHandover,
-                            onCheckNetworkApp = viewModel::checkNetworkAppBackup,
-                            onBringFromNetworkApp = viewModel::bringPeopleFromNetworkApp,
+                            movedFromNetworkApp = movedFromNetworkApp,
                             onOpenAppSettings = onOpenAppSettings,
                             onRevokeAssistantConsent = viewModel::revokeAssistantConsent,
-                            onSaveBackupConfig = viewModel::saveBackupConfig,
-                            onBackupNow = viewModel::backupNow,
-                            onVerifyBackup = viewModel::verifyBackup,
-                            onRestore = viewModel::restoreFromGitHub,
+                            onSaveNow = viewModel::saveNow,
+                            onSaveRemovingPeople = viewModel::saveRemovingPeople,
+                            onLoadFromLife = viewModel::loadFromLife,
+                            onSetTestBuildOwnsFolder = viewModel::setTestBuildOwnsFolder,
                             onDeleteFeedback = viewModel::deleteFeedback,
                             onClearFeedback = viewModel::clearAllFeedback,
-                            onSetInboxEnabled = viewModel::setInboxEnabled,
-                            onCheckInbox = { viewModel.checkInbox(fromSettings = true) },
                         )
                     }
                 }

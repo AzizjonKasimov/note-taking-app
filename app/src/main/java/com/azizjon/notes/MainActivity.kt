@@ -40,8 +40,8 @@ class MainActivity : ComponentActivity() {
         app.reminders.onAppOpened()
         // Coming back from the PC is when its drafts for People are waiting.
         people.checkInbox()
-        // Network App's "Move to Notes" hands over the check-in's answers in a screen of its own.
-        people.refreshNetworkAppHandover()
+        // Network App's "Move to Notes" hands its people over in a screen of its own.
+        people.refreshAfterMove()
     }
 
     override fun onNewIntent(intent: Intent) {

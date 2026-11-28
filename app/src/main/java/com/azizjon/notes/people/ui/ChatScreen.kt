@@ -54,7 +54,7 @@ import com.azizjon.notes.people.ai.ChatState
 import com.azizjon.notes.people.ai.PhotoLimits
 import com.azizjon.notes.people.data.NetworkSnapshot
 import com.azizjon.notes.people.feedback.AiFeedbackLabel
-import com.azizjon.notes.people.inbox.InboxDraft
+import com.azizjon.notes.people.life.InboxDraft
 
 /**
  * The single conversational surface for recording, correcting, and asking.

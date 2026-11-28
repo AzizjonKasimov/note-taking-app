@@ -75,7 +75,7 @@ fun PeopleScreen(
                 title = {
                     Column {
                         Text("Your network")
-                        Text("${people.size} people", style = MaterialTheme.typography.labelMedium)
+                        Text(if (people.size == 1) "1 person" else "${people.size} people", style = MaterialTheme.typography.labelMedium)
                     }
                 },
             )

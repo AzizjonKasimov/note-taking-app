@@ -221,6 +221,17 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
         _connection.value = Connection.Off
     }
 
+    /**
+     * Whether the repo is private on GitHub, asked of GitHub now; null for a repo elsewhere, such as
+     * the emulator's test server. Throws [IOException] when GitHub cannot be asked.
+     */
+    suspend fun isPrivateOnGitHub(): Boolean? = withContext(Dispatchers.IO) {
+        val url = settings.remoteUrl
+        if (url == null || !url.startsWith("https://github.com/")) return@withContext null
+        val token = tokens.read() ?: throw IOException("Enter your GitHub token again in Settings.")
+        GitHubAccess.isPrivate(token, GitHubAccess.repoName(url))
+    }
+
     /** Replaces the token, keeping the phone's copy. */
     suspend fun replaceToken(token: String) {
         val clean = token.trim()
@@ -366,6 +377,8 @@ class LifeRepository(private val context: Context, private val scope: CoroutineS
     private suspend fun noteChanged(path: String) {
         localEdits[path] = System.currentTimeMillis()
         dirtySinceSync = true
+        // Only Markdown files are notes: People's files in `people/` are data, kept out of the list.
+        if (!path.endsWith(".md", ignoreCase = true)) return
         val entry = withContext(Dispatchers.IO) { entryFor(path) }
         _notes.update { list ->
             val rest = list.orEmpty().filterNot { it.path == path }

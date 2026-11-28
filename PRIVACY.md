@@ -7,32 +7,27 @@ where, and what leaves the phone. The rest of Notes, the notes repo, is describe
 
 ## Where People's data lives
 
-- In its own Room database on the phone (`people.db`), never in your notes repo, and apart from it
-  in every way: the notes assistant cannot read it.
+- In its own Room database on the phone (`people.db`), which is what counts.
+- A copy in your notes repo, which must be private on GitHub: a few seconds after each change,
+  People writes the `people/` folder, one JSON file per person and `reports.json` (below), and the
+  next sync pushes it with your notes. Contact values (phone numbers, emails) are never written
+  there; they stay on the phone. Anyone who can open your notes repo can read these files, and
+  git keeps their earlier versions in the repo's history.
+- Before saving, People asks GitHub whether the repo is private (at most once an hour) and saves
+  nothing into a public repo, or while it cannot ask.
 - Android's own cloud backup and device-to-device transfer leave out every People file (its
   database and its settings). The rest of Notes uses that backup for its settings.
 - There is no account, analytics, telemetry, advertising, contact scraping, or automatic import of
   your address book.
 - Manual editing, browsing, local search, and the check-in work without the AI gateway.
 
-## The encrypted backup
-
-People's backup is turned on in **People → Settings**. The whole People database (and the reports
-below) is encrypted on the phone with AES-256-GCM, with a key made from your passphrase
-(PBKDF2-HMAC-SHA256), and uploaded to a private GitHub repo you choose. The app refuses a repo that
-is public. The GitHub token and the passphrase stay in Android's encrypted storage and are never in
-the backup. Earlier versions stay readable only with the passphrase, in the repo's git history.
-
-Notes writes `people-backup.enc.json` (debug builds: `debug-people-backup.enc.json`). It never writes
-a backup with no people in it.
-
 ## Moving from Network App
 
-Once, when you move: Network App 0.21 saves one last backup, then hands the check-in's answers to
-Notes on the phone, app to app. Nothing leaves the phone in that hand-over. Network App sends them
-only to Notes signed with Notes' own key, and Notes takes them only from Network App signed with
-Network App's key. Then Notes opens Network App's last backup (`network-backup.enc.json`) with your
-passphrase, puts its people in, and saves its own first backup. Network App's file stays as it was.
+Once, when you move: Network App 0.21 saves one last backup to its own data repo (if backups are
+set up), then hands everything to Notes on the phone, app to app: every person and record, the
+reports, and the check-in's answers. Nothing leaves the phone in that hand-over. Network App sends
+it only to Notes signed with Notes' own key, and Notes takes it only from Network App signed with
+Network App's key, and only while its People is empty. Notes then writes the `people/` folder.
 
 ## The assistant
 
@@ -61,13 +56,17 @@ on a card for your tap, and cannot be undone afterwards.
 Earlier messages are sent again with a new one (at most six, and 3,000 characters), from memory
 only; they are never stored.
 
+The "tell me anything" assistant on Today works on your notes repo, so it can also read a person's
+file in `people/` when a question needs it, which sends that file to the gateway like any note it
+reads. It cannot change those files.
+
 ## Photos
 
 You can attach up to three photos to a message (the photo picker, the camera app, or a share from
 another app); none needs a storage or camera permission. A photo goes only with its message, after
 the phone makes a new, smaller JPEG of it, which drops its metadata, such as location. It is held in
-memory only: never stored, backed up, or sent again. The assistant's instructions forbid recognizing
-anyone by face.
+memory only: never stored, saved to the repo, or sent again. The assistant's instructions forbid
+recognizing anyone by face.
 
 ## Check-in
 
@@ -81,41 +80,41 @@ about saved details that may be out of date. Each source is off until you turn i
   stored.
 - **An evening reminder**, with Android's notification permission.
 
-What the check-in collects stays on the phone, in its own table: it is not in the backup, the
-assistant cannot read it, and nothing of it goes to the gateway. A name leaves the phone only in a
-message you send.
+What the check-in collects stays on the phone, in its own table: it is not in the `people/` files,
+the assistant cannot read it, and nothing of it goes to the gateway. A name leaves the phone only in
+a message you send.
 
 ## Drafts from your PC
 
-Off until you turn it on in People's settings. The phone then makes a key pair; the private key
-never leaves the phone, and the public key goes to the private data repo
-(`people-backup-inbox/key.json`). `scripts/queue-draft.ps1` on your PC encrypts each draft to that
-key, so the repo holds only ciphertext. The phone takes waiting drafts when the app opens, deletes
-them from the repo, and shows them in the Assistant. A draft reaches the gateway only when you tap
-**Send**.
+`scripts/queue-draft.ps1` on your PC puts a draft, as a plain text file, in your notes repo's
+`people/drafts/` through GitHub. After the phone's next sync it waits above People's message box,
+and the phone deletes the file once you send, edit, or discard it. A draft reaches the gateway only
+when you tap **Send**.
 
 ## Reported answers
 
 **Report a problem** on a reply stores, on the phone, your message, the reply, and its tool calls
-(contact values removed). Reports travel only inside the encrypted backup and never go to the
-gateway. `scripts/read-feedback.ps1` reads them on a PC with the passphrase.
+(contact values removed). Reports are saved in `people/reports.json` in your notes repo and never go
+to the gateway. Delete one in People's settings once its fault is fixed.
 
 ## Lookups on your PC
 
-`scripts/network-lookup.ps1` reads people from the encrypted backup on a PC: it refuses a public
-repo, asks for the passphrase for every lookup, decrypts in memory, prints only what was asked for
-(never a contact value), and writes nothing to disk. Whatever it prints goes to whoever runs it,
-including an AI coding agent and that agent's provider.
+`scripts/network-lookup.ps1` reads the `people/` files of your notes repo's clone on a PC and prints
+only what was asked for: one person's profile with their latest notes, or the people whose records
+hold some words (never a contact value). Whatever it prints goes to whoever runs it, including an AI
+coding agent and that agent's provider.
 
 ## Keys
 
-The AI key, the GitHub token for the backup, and the passphrase are entered by you, never built into
-the app (releases are public), and kept in Android's encrypted storage. A key stored on a phone can
-still be taken from a rooted or compromised phone; revoke it if the phone is lost.
+The AI key and the GitHub token for your notes repo are entered by you, never built into the app
+(releases are public), and kept sealed with the Android Keystore. A key stored on a phone can still
+be taken from a rooted or compromised phone; revoke it if the phone is lost. People has no key or
+passphrase of its own.
 
 ## Deleting
 
-Deleting a person deletes their notes and records. Backups keep data until they are replaced, and
-their earlier versions stay in the private repo's git history. Taking back the assistant's
-permission stops new requests but does not delete what the gateway's operator or Anthropic already
-received.
+Deleting a person deletes their notes and records, and the next save removes their file from your
+notes repo; earlier versions stay in the repo's git history. A save that would remove the files of
+more than five people at once waits for you to confirm it in People's settings. Taking back the
+assistant's permission stops new requests but does not delete what the gateway's operator or
+Anthropic already received.

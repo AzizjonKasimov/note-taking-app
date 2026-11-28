@@ -20,6 +20,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\NetworkBackup.ps1')
 . (Join-Path $PSScriptRoot 'lib\NetworkLookup.ps1')
+. (Join-Path $PSScriptRoot 'lib\PeopleFiles.ps1')
 
 function New-TestEnvelope([string]$PayloadJson, [string]$Passphrase) {
     # The envelope EncryptedBackupCodec writes: PBKDF2-HMAC-SHA256, then AES-256-GCM with its tag appended.
@@ -114,6 +115,7 @@ function Lookup([hashtable]$Options) {
 
 $passphrase = 'synthetic-passphrase-for-tests'
 $envelopePath = Join-Path ([IO.Path]::GetTempPath()) "network-lookup-test-$([guid]::NewGuid()).json"
+$folderPath = Join-Path ([IO.Path]::GetTempPath()) "network-lookup-test-people-$([guid]::NewGuid())"
 try {
     New-TestEnvelope ($payload | ConvertTo-Json -Depth 6) $passphrase | Set-Content -LiteralPath $envelopePath -Encoding utf8NoBOM
     $envelope = Get-NetworkBackupEnvelope -Owner 'unused' -Repo 'unused' -Branch 'unused' -Path 'unused' -EnvelopeFile $envelopePath
@@ -158,12 +160,44 @@ try {
     $me = Lookup @{ Self = $true }
     Check 'shows the owner''s own profile' ($me.Contains('== Synthetic Me (you)') -and $me.Contains('Find speakers for a synthetic meetup'))
 
+    Write-Host '==> The notes repo''s people folder' -ForegroundColor Cyan
+    # The files Notes' People writes (PeopleFiles.kt): one per person, without contact values, and the reports.
+    New-Item -ItemType Directory -Path $folderPath | Out-Null
+    foreach ($person in $people) {
+        $id = $person.id
+        $own = [ordered]@{}
+        foreach ($key in $person.Keys) { if ($key -ne 'contact') { $own[$key] = $person[$key] } }
+        $doc = [ordered]@{
+            format         = 'notes-people-person'
+            version        = 1
+            schemaVersion  = 10
+            person         = $own
+            affiliations   = @($payload.affiliations | Where-Object { $_.personId -eq $id })
+            interactions   = @($payload.interactions | Where-Object { $_.personId -eq $id })
+            needs          = @($payload.needs | Where-Object { $_.personId -eq $id })
+            capabilities   = @($payload.capabilities | Where-Object { $_.personId -eq $id })
+            facts          = @($payload.facts | Where-Object { $_.personId -eq $id })
+        }
+        $doc | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $folderPath "person-$id.json") -Encoding utf8NoBOM
+    }
+    [ordered]@{ format = 'notes-people-reports'; version = 1; reports = @($payload.feedback) } | ConvertTo-Json -Depth 6 |
+        Set-Content -LiteralPath (Join-Path $folderPath 'reports.json') -Encoding utf8NoBOM
+    Check 'sees that the folder holds people' (Test-LifePeople -Folder $folderPath)
+    $script:decrypted = Get-PeopleFromLife -Folder $folderPath
+    Check 'reads every person from the files' (@($decrypted.people).Count -eq 9)
+    $fileSara = Lookup @{ Name = @('Synthetic Sara') }
+    Check 'says it read the people folder' ($fileSara.Contains("Read from the notes repo's people folder"))
+    Check 'shows the same profile from the files' ($fileSara.Contains('Synthetic designer at Example Labs (current') -and $fileSara.Contains('Notes, newest first (10 of 12; add -AllNotes for the rest)'))
+    Check 'has no contact value in the files' ($fileSara.Contains('Contact saved: no'))
+    Check 'searches the files' ((Lookup @{ Search = 'robotics' }).Contains('== Synthetic Kim A'))
+
     Write-Host '==> Never printed' -ForegroundColor Cyan
     $printed = $everything.ToString()
     Check 'no contact value in any output' (-not $printed.Contains($email) -and -not $printed.Contains($phone))
     Check 'no assistant report in any output' (-not $printed.Contains($reportText))
 } finally {
     Remove-Item -LiteralPath $envelopePath -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $folderPath) { Get-ChildItem -LiteralPath $folderPath -File | Remove-Item; Remove-Item -LiteralPath $folderPath }
 }
 
 if ($failures.Count) {

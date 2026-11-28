@@ -6,7 +6,10 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** The two GitHub API calls the app makes when it connects: who the token is, and which repos it reaches. */
+/**
+ * The GitHub API calls the app makes: when it connects, who the token is and which repos it
+ * reaches; before People saves its files, whether the repo is still private.
+ */
 object GitHubAccess {
 
     data class Account(val login: String, val name: String, val noReplyEmail: String)
@@ -33,6 +36,10 @@ object GitHubAccess {
             RepoRef(repo.getString("full_name"), repo.getString("clone_url"), repo.optBoolean("private"))
         }
     }
+
+    /** Whether the repo "owner/name" is private, as GitHub says now. */
+    fun isPrivate(token: String, fullName: String): Boolean =
+        JSONObject(get("https://api.github.com/repos/$fullName", token)).optBoolean("private", false)
 
     /** The repo to clone when the user named none: the only private one, or the only one. */
     fun pick(repos: List<RepoRef>): RepoRef? =

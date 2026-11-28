@@ -1,16 +1,20 @@
 #Requires -Version 7.4
 <#
 .SYNOPSIS
-    Queue a draft for the people assistant (Notes' People, Network App before it), encrypted so that only the phone can read it.
+    Queue a draft for the people assistant: People in Notes, or Network App before the move.
 
 .DESCRIPTION
     Sessions on this PC use this to hand an update to the phone without copy and
-    paste. The draft is encrypted here to the public key the phone published in
-    the private data repository, uploaded beside the backup, and taken by the
-    phone the next time the app opens. The phone shows it in People's Assistant
-    (Network App's Assistant tab before the move to Notes) and sends nothing
-    until the user taps Send. Without -BackupPath, drafts go to Notes' People
-    inbox once Notes has made its key there, and to Network App's until then.
+    paste. The phone shows the draft above the assistant's message box and sends
+    nothing until the user taps Send.
+
+    Once Notes holds People (life\people\ has people's files), the draft is a plain
+    text file in the notes repo's people/drafts/, put there on GitHub, which Notes
+    shows after its next sync and removes once used.
+
+    Before that, it goes to Network App: encrypted here to the public key the phone
+    published in the private data repository, uploaded beside the backup, and taken
+    by the phone the next time Network App opens.
 
     The draft comes from the pipeline or from -Path, never from a command-line
     argument, and it is never printed, logged, or written anywhere else. No
@@ -48,11 +52,14 @@ param(
     [switch]$TrustNewKey,
 
     [string]$Owner = 'AzizjonKasimov',
+    # The notes repo, and its people folder on this PC (by default life\people beside this checkout).
+    [string]$LifeRepo = 'life',
+    [string]$Folder,
+    # Network App's data repository, used until Notes holds People.
     [string]$Repo = 'network-app-data',
     [string]$Branch = 'main',
-    # Settings' Backup path on the phone, which names the inbox folder. Left out: Notes'
-    # People inbox once its key is there, else Network App's (until the move, Notes 2.5).
-    [string]$BackupPath,
+    # Network App's Backup path, which names its inbox folder.
+    [string]$BackupPath = 'network-backup.enc.json',
 
     # Offline, for tests: encrypt to a local key.json and write the envelope to
     # -OutFile, touching nothing on GitHub.
@@ -66,6 +73,8 @@ begin {
     $ErrorActionPreference = 'Stop'
     # For Assert-NetworkDataRepository, the check the lookup scripts make too.
     . (Join-Path $PSScriptRoot 'lib\NetworkBackup.ps1')
+    . (Join-Path $PSScriptRoot 'lib\PeopleFiles.ps1')
+    if (-not $Folder) { $Folder = Get-LifePeopleFolder }
     # The Assistant's limit, AgentClient.MAX_INPUT_CHARACTERS in the app.
     $maxCharacters = 4000
     $label = 'network-app-inbox-draft:1'
@@ -193,20 +202,11 @@ process {
 }
 
 end {
-    if (-not $BackupPath) {
-        $BackupPath = if ($PublicKeyFile) {
-            'people-backup.enc.json'
-        } else {
-            Assert-NetworkDataRepository -Owner $Owner -Repo $Repo -Action 'queue network data to'
-            Resolve-PeopleBackupPath -Owner $Owner -Repo $Repo -Branch $Branch -ForInbox
-        }
-    }
     $folder = Get-InboxFolder $BackupPath
     $pinName = "$Owner/$Repo/$folder"
-    # Which app reads this inbox, for the messages below.
-    $networkApp = $folder -eq 'network-backup-inbox'
-    $appName = if ($networkApp) { 'Network App' } else { 'Notes' }
-    $appSettings = if ($networkApp) { 'Network App > Settings' } else { 'Notes > People > Settings' }
+    # The encrypted inbox is Network App's only; Notes takes plain drafts from the notes repo.
+    $appName = 'Network App'
+    $appSettings = 'Network App > Settings'
 
     if ($TrustNewKey) {
         # Read-Host would accept piped input, which would let a session confirm a key it cannot see.
@@ -237,6 +237,31 @@ end {
     if (-not $text) { throw 'The draft is empty. Pipe it in or pass -Path.' }
     if ($text.Length -gt $maxCharacters) {
         throw "The draft is $($text.Length) characters, and the Assistant takes at most $maxCharacters. Split it into several drafts."
+    }
+
+    # Once Notes holds People, a draft is a plain file in the notes repo's people/drafts/, which
+    # Notes shows above People's message box after its next sync, and removes once used.
+    if (-not $PublicKeyFile -and (Test-LifePeople -Folder $Folder)) {
+        Assert-NetworkDataRepository -Owner $Owner -Repo $LifeRepo -Action 'queue a draft to'
+        $id = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(4)).ToLowerInvariant()
+        $name = '{0}-{1}.txt' -f [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'"), $id
+        $body = [ordered]@{
+            message = 'People: draft from the PC'
+            branch  = $Branch
+            content = [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($text))
+        } | ConvertTo-Json -Compress
+        for ($attempt = 1; ; $attempt++) {
+            $upload = Invoke-GitHub @('api', '-X', 'PUT', "repos/$Owner/$LifeRepo/contents/people/drafts/$name", '--input', '-', '--jq', '.content.path') $body
+            if ($upload.Code -eq 0) { break }
+            # The phone pushes to the same branch when it syncs; a collision is worth another try.
+            if ($attempt -lt 3 -and $upload.Error -match 'HTTP 409') {
+                Start-Sleep -Seconds 2
+                continue
+            }
+            throw "Could not upload the draft: $($upload.Error)"
+        }
+        Write-Host "Queued a $($text.Length)-character draft as people/drafts/$name in $Owner/$LifeRepo. Notes shows it above People's message box after the phone's next sync." -ForegroundColor Green
+        return
     }
 
     if ($PublicKeyFile) {
